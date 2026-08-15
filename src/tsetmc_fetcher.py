@@ -45,9 +45,9 @@ class TSETMCFetcher:
                     "open_price": df["priceFirst"],
                     "high_price": df["priceMax"],
                     "low_price": df["priceMin"],
-                    "volume": df["qTitTran"],
-                    "value": df["qTitCap"],
-                    "count": df["zTran"],
+                    "volume": df["qTotTran5J"],
+                    "value": df["qTotCap"],
+                    "count": df["zTotTran"],
                 }
             )
 
