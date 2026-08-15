@@ -42,7 +42,7 @@ class TechnicalIndicators:
 
     @classmethod
     def apply_all(cls, df: pd.DataFrame) -> pd.DataFrame:
-        """اعمال تمام اندیکاتورهای پایه روی داده‌ها"""
+        """Apply all base indicators to the data"""
         df = cls.add_sma(df, period=20)
         df = cls.add_sma(df, period=50)
         df = cls.add_ema(df, period=20)
