@@ -5,8 +5,13 @@ from src.indicators import TechnicalIndicators
 
 
 def main():
-    symbol = "فملی"
-    print(f"🚀 Starting v0.1 test for symbol: {symbol}\n")
+    symbol = input("Enter stock symbol (e.g. فملی): ").strip()
+
+    if not symbol:
+        print("❌ No symbol entered.")
+        return
+
+    print(f"\n🚀 Starting v0.1 test for symbol: {symbol}\n")
 
     # 1. Fetch data from TSETMC
     fetcher = TSETMCFetcher()
