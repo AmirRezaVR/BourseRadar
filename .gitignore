@@ -2,12 +2,27 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+.eggs/
+
+# Virtual environments
 venv/
 .venv/
+env/
 
 # Database
 data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Environment variables
+.env
 
 # IDEs
 .vscode/
 .idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
