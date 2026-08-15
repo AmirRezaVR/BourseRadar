@@ -8,7 +8,6 @@ class TSETMCFetcher:
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        # شناسه برخی نمادهای شاخص برای تست (قابل توسعه در فازهای بعدی)
         self.SYMBOL_MAP = {
             "فملی": "35425587644337450",
             "فولاد": "46348084566421241",
@@ -20,10 +19,9 @@ class TSETMCFetcher:
         return self.SYMBOL_MAP.get(symbol)
 
     def fetch_daily_history(self, symbol: str) -> pd.DataFrame:
-        """دریافت تاریخچه قیمت روزانه نماد از API رسمی TSETMC"""
         inscode = self.get_symbol_id(symbol)
         if not inscode:
-            print(f"❌ نماد {symbol} در نقشه اولیه یافت نشد.")
+            print(f"❌ Symbol {symbol} not found in the initial map.")
             return pd.DataFrame()
 
         url = f"https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/{inscode}/0"
@@ -38,12 +36,12 @@ class TSETMCFetcher:
 
             df = pd.DataFrame(data)
 
-            # استخراج و مرتب‌سازی ستون‌های مورد نیاز
+            # Extract and organize the required columns
             df_cleaned = pd.DataFrame(
                 {
                     "date": df["dEven"].astype(str),
                     "close_price": df["pClosing"],
-                    "last_price": df["pDrPri"],
+                    "last_price": df["pDrCotVal"],
                     "open_price": df["priceFirst"],
                     "high_price": df["priceMax"],
                     "low_price": df["priceMin"],
@@ -53,10 +51,10 @@ class TSETMCFetcher:
                 }
             )
 
-            # مرتب‌سازی بر اساس تاریخ (قدیمی به جدید)
+            # Sort by date (oldest to newest)
             df_cleaned = df_cleaned.sort_values("date").reset_index(drop=True)
             return df_cleaned
 
         except Exception as e:
-            print(f"❌ خطا در دریافت داده‌های TSETMC برای {symbol}: {e}")
+            print(f"❌ Error fetching TSETMC data for {symbol}: {e}")
             return pd.DataFrame()
