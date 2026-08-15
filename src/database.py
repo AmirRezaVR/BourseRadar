@@ -6,7 +6,7 @@ from pathlib import Path
 class DatabaseManager:
     def __init__(self, db_path: str = "data/tsetmc.db"):
         self.db_path = db_path
-        # اطمینان از وجود پوشه data
+        # Ensure the data folder exists
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -14,7 +14,7 @@ class DatabaseManager:
         return sqlite3.connect(self.db_path)
 
     def _init_db(self):
-        """ساخت جدول‌های اولیه دیتابیس"""
+        """Create the initial database tables"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -36,21 +36,27 @@ class DatabaseManager:
             conn.commit()
 
     def save_history(self, symbol: str, df: pd.DataFrame):
-        """ذخیره یا بروزرسانی دیتافریم قیمت تاریخی در دیتابیس"""
+        """Insert historical price rows into the database, skipping duplicates"""
         if df.empty:
             return
 
         df_to_save = df.copy()
         df_to_save["symbol"] = symbol
 
+        cols = list(df_to_save.columns)
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+
         with self._get_connection() as conn:
-            # ذخیره دیتا در دیتابیس
-            df_to_save.to_sql(
-                "price_history", conn, if_exists="append", index=False, method="ignore"
+            cursor = conn.cursor()
+            cursor.executemany(
+                f"INSERT OR IGNORE INTO price_history ({col_names}) VALUES ({placeholders})",
+                df_to_save[cols].values.tolist(),
             )
+            conn.commit()
 
     def get_history(self, symbol: str) -> pd.DataFrame:
-        """خواندن تاریخچه قیمت یک نماد از دیتابیس"""
+        """Read the price history for a symbol from the database"""
         with self._get_connection() as conn:
             query = "SELECT * FROM price_history WHERE symbol = ? ORDER BY date ASC"
             return pd.read_sql_query(query, conn, params=(symbol,))
