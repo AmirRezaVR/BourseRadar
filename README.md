@@ -59,11 +59,3 @@ bourseradar/
 ├── main.py                  # run this
 └── requirements.txt
 ```
-
-## Where this is headed
-
-Still fairly early. Next up is probably a proper stock screener and volume/order-book analysis — the rest is in the [issues](../../issues) if you're curious or want to help.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
