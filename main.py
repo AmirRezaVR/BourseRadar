@@ -1,3 +1,4 @@
+import pandas as pd
 from src.tsetmc_fetcher import TSETMCFetcher
 from src.database import DatabaseManager
 from src.indicators import TechnicalIndicators
@@ -5,33 +6,33 @@ from src.indicators import TechnicalIndicators
 
 def main():
     symbol = "فملی"
-    print(f"🚀 شروع تست نسخه 0.1 برای نماد: {symbol}\n")
+    print(f"🚀 Starting v0.1 test for symbol: {symbol}\n")
 
-    # ۱. دریافت داده از TSETMC
+    # 1. Fetch data from TSETMC
     fetcher = TSETMCFetcher()
-    print("⏳ در حال دریافت داده از TSETMC...")
+    print("⏳ Fetching data from TSETMC...")
     df = fetcher.fetch_daily_history(symbol)
 
     if df.empty:
-        print("❌ متأسفانه داده‌ای دریافت نشد.")
+        print("❌ No data was retrieved.")
         return
 
-    print(f"✅ تعداد {len(df)} روز کاری دریافت شد.")
+    print(f"✅ Retrieved {len(df)} trading days.")
 
-    # ۲. ذخیره در دیتابیس SQLite
+    # 2. Save to SQLite database
     db = DatabaseManager()
     db.save_history(symbol, df)
-    print("💾 داده‌ها در دیتابیس SQLite ذخیره شدند.")
+    print("💾 Data saved to SQLite database.")
 
-    # ۳. محاسبه اندیکاتورها
+    # 3. Calculate indicators
     df_analyzed = TechnicalIndicators.apply_all(df)
 
-    # ۴. نمایش آخرین وضعیت نماد
+    # 4. Show latest status for the symbol
     latest = df_analyzed.iloc[-1]
     print("\n" + "=" * 40)
-    print(f"📊 گزارش فنی اولیه برای نماد {symbol}")
-    print(f"📅 تاریخ آخرین معامله: {latest['date']}")
-    print(f"🔹 قیمت پایانی: {latest['close_price']:,.0f} ریال")
+    print(f"📊 Initial technical report for {symbol}")
+    print(f"📅 Last trade date: {latest['date']}")
+    print(f"🔹 Closing price: {latest['close_price']:,.0f} Rial")
     print(
         f"🔹 SMA 20: {latest['SMA_20']:,.0f}"
         if not pd.isna(latest["SMA_20"])
@@ -52,6 +53,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import pandas as pd
-
     main()
