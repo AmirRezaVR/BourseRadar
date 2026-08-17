@@ -6,7 +6,6 @@ from pathlib import Path
 class DatabaseManager:
     def __init__(self, db_path: str = "data/tsetmc.db"):
         self.db_path = db_path
-        # Ensure the data folder exists
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
