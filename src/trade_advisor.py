@@ -23,7 +23,15 @@ class TradeSignal:
 
 
 class TradeAdvisor:
+    """
+    Rule-based technical signal generator for SHORT-TERM SWING TRADES
+    with a MODERATE risk/reward profile (target risk:reward ~= 1:2).
 
+    This is NOT financial advice. It is a deterministic, rule-based
+    summary of technical indicators already computed on the price history.
+    It has no knowledge of fundamentals, news, market-wide conditions,
+    or your personal financial situation.
+    """
 
     ATR_STOP_MULTIPLIER = 1.5  # moderate risk: 1.5x ATR below entry
     RISK_REWARD_RATIO = 2.0  # moderate: aim for 2x the risked amount
