@@ -2,25 +2,18 @@ import pandas as pd
 from src.tsetmc_fetcher import TSETMCFetcher
 from src.database import DatabaseManager
 from src.indicators import TechnicalIndicators
-from src.trade_advisor import TradeAdvisor
+from src.signal_engine import SignalEngine, VERDICT_ICONS, MIN_HISTORY_DAYS
 
 EXIT_COMMANDS = {"exit", "quit", "q", "خروج", "پایان"}
 SEPARATORS = ["،", ";", "؛", ","]  # accepted alongside the primary space separator
 
 LANG_CHOICES = {
-    "1": "en",
-    "en": "en",
-    "english": "en",
-    "2": "fa",
-    "fa": "fa",
-    "farsi": "fa",
-    "persian": "fa",
-    "فارسی": "fa",
+    "1": "en", "en": "en", "english": "en",
+    "2": "fa", "fa": "fa", "farsi": "fa", "persian": "fa", "فارسی": "fa",
 }
 
 
 def choose_language() -> str:
-    """Ask the user once, at startup, which language all output should be in."""
     print("=" * 50)
     print("🌐 Choose your language / زبان خود را انتخاب کنید")
     print("=" * 50)
@@ -49,12 +42,7 @@ def parse_symbols(raw: str) -> list:
 
 def print_technical_report(symbol: str, latest: pd.Series, lang: str):
     sma20, ema20, ema50 = latest["SMA_20"], latest["EMA_20"], latest["EMA_50"]
-    rsi, macd, macd_signal, atr = (
-        latest["RSI_14"],
-        latest["MACD"],
-        latest["MACD_Signal"],
-        latest["ATR_14"],
-    )
+    rsi, macd, macd_signal, atr = latest["RSI_14"], latest["MACD"], latest["MACD_Signal"], latest["ATR_14"]
 
     print("\n" + "=" * 50)
     if lang == "en":
@@ -73,62 +61,42 @@ def print_technical_report(symbol: str, latest: pd.Series, lang: str):
         print("=" * 50)
         print(f"📅 تاریخ آخرین معامله: {latest['date']}")
         print(f"🔹 قیمت پایانی: {latest['close_price']:,.0f} ریال")
-        print(
-            f"🔹 میانگین متحرک ساده ۲۰ روزه (SMA20): {sma20:,.0f}"
-            if not pd.isna(sma20)
-            else "🔹 SMA 20: -"
-        )
-        print(
-            f"🔹 میانگین متحرک نمایی ۲۰ روزه (EMA20): {ema20:,.0f}"
-            if not pd.isna(ema20)
-            else "🔹 EMA 20: -"
-        )
-        print(
-            f"🔹 میانگین متحرک نمایی ۵۰ روزه (EMA50): {ema50:,.0f}"
-            if not pd.isna(ema50)
-            else "🔹 EMA 50: -"
-        )
-        print(
-            f"🔹 شاخص قدرت نسبی RSI (۱۴ روزه): {rsi:.2f}"
-            if not pd.isna(rsi)
-            else "🔹 RSI: -"
-        )
+        print(f"🔹 میانگین متحرک ساده ۲۰ روزه (SMA20): {sma20:,.0f}" if not pd.isna(sma20) else "🔹 SMA 20: -")
+        print(f"🔹 میانگین متحرک نمایی ۲۰ روزه (EMA20): {ema20:,.0f}" if not pd.isna(ema20) else "🔹 EMA 20: -")
+        print(f"🔹 میانگین متحرک نمایی ۵۰ روزه (EMA50): {ema50:,.0f}" if not pd.isna(ema50) else "🔹 EMA 50: -")
+        print(f"🔹 شاخص قدرت نسبی RSI (۱۴ روزه): {rsi:.2f}" if not pd.isna(rsi) else "🔹 RSI: -")
         print(f"🔹 مکدی (MACD): {macd:.2f} | خط سیگنال: {macd_signal:.2f}")
-        print(
-            f"🔹 میانگین محدوده واقعی ATR (۱۴ روزه): {atr:.2f}"
-            if not pd.isna(atr)
-            else "🔹 ATR: -"
-        )
+        print(f"🔹 میانگین محدوده واقعی ATR (۱۴ روزه): {atr:.2f}" if not pd.isna(atr) else "🔹 ATR: -")
     print("=" * 50)
 
 
-def print_trade_signal(symbol: str, signal, lang: str):
-    verdict_icons = {"BUY": "🟢", "WATCH": "🟡", "AVOID": "🔴"}
-    icon = verdict_icons.get(signal.verdict, "")
+def print_recommendation(symbol: str, rec, lang: str):
+    icon = VERDICT_ICONS.get(rec.verdict, "")
 
     if lang == "en":
-        print(f"\n📌 Swing-Trade Signal — {symbol}")
+        print(f"\n📌 Multi-Factor Signal — {symbol}")
         print("-" * 50)
-        print(f"Verdict:          {icon} {signal.verdict}")
-        print(f"Signal score:     {signal.score}/100")
-        print(f"Current price:    {signal.current_price:,.0f} Rial")
-        print(
-            f"Suggested entry:  {signal.entry_low:,.0f} – {signal.entry_high:,.0f} Rial"
-        )
-        print(f"Stop-loss:        {signal.stop_loss:,.0f} Rial")
-        print(f"Target:           {signal.target:,.0f} Rial")
-        print(f"Risk : Reward:    1 : {signal.risk_reward_ratio}")
+        print(f"Verdict:          {icon} {rec.verdict_en}")
+        print(f"Confidence:       {rec.confidence:.0f}%   (composite {rec.composite_score:+.2f})")
+        print(f"Current price:    {rec.current_price:,.0f} Rial")
+        print(f"Suggested entry:  {rec.entry_low:,.0f} – {rec.entry_high:,.0f} Rial")
+        print(f"Stop-loss:        {rec.stop_loss:,.0f} Rial")
+        print(f"Target:           {rec.target:,.0f} Rial   (1:{rec.risk_reward_ratio})")
 
-        print("\nWhy:")
-        for r in signal.reasons:
+        print("\nFactor breakdown:")
+        for f in rec.factors:
+            print(f"  {f.label_en:32s} {f.score:+.2f}  (weight {f.weight:4.1f})  ->  {f.reason_en}")
+        print(f"  {'Volatility (confidence modifier)':32s} x{rec.volatility_multiplier:.2f}       ->  {rec.volatility_reason_en}")
+
+        print("\n✅ Positive confirmations:")
+        for c in rec.confirmations_en:
+            print(f"  • {c}")
+        print("\n⚠️  Risk warnings:")
+        for r in rec.risks_en:
             print(f"  • {r}")
-        if signal.warnings:
-            print("\n⚠️  Notes:")
-            for w in signal.warnings:
-                print(f"  • {w}")
 
         print("\nSummary:")
-        print(f"  {signal.summary_en}")
+        print(f"  {rec.summary_en}")
 
         print("\n" + "-" * 50)
         print(
@@ -138,28 +106,29 @@ def print_trade_signal(symbol: str, signal, lang: str):
         )
         print("-" * 50)
     else:
-        print(f"\n📌 سیگنال معاملاتی — {symbol}")
+        print(f"\n📌 سیگنال چندعاملی — {symbol}")
         print("-" * 50)
-        print(f"نتیجه:              {icon} {signal.verdict_fa}")
-        print(f"امتیاز سیگنال:        {signal.score} از ۱۰۰")
-        print(f"قیمت فعلی:           {signal.current_price:,.0f} ریال")
-        print(
-            f"محدوده ورود پیشنهادی: {signal.entry_low:,.0f} تا {signal.entry_high:,.0f} ریال"
-        )
-        print(f"حد ضرر:              {signal.stop_loss:,.0f} ریال")
-        print(f"هدف قیمتی:           {signal.target:,.0f} ریال")
-        print(f"نسبت ریسک به بازده:    ۱ به {signal.risk_reward_ratio}")
+        print(f"نتیجه:              {icon} {rec.verdict_fa}")
+        print(f"اطمینان:            {rec.confidence:.0f}٪   (امتیاز ترکیبی {rec.composite_score:+.2f})")
+        print(f"قیمت فعلی:           {rec.current_price:,.0f} ریال")
+        print(f"محدوده ورود پیشنهادی: {rec.entry_low:,.0f} تا {rec.entry_high:,.0f} ریال")
+        print(f"حد ضرر:              {rec.stop_loss:,.0f} ریال")
+        print(f"هدف قیمتی:           {rec.target:,.0f} ریال   (۱ به {rec.risk_reward_ratio})")
 
-        print("\nدلایل:")
-        for r in signal.reasons_fa:
+        print("\nتفکیک عوامل:")
+        for f in rec.factors:
+            print(f"  {f.label_fa:35s} {f.score:+.2f}  (وزن {f.weight:.0f})  ->  {f.reason_fa}")
+        print(f"  {'نوسان (تعدیل‌کننده اطمینان)':35s} x{rec.volatility_multiplier:.2f}     ->  {rec.volatility_reason_fa}")
+
+        print("\n✅ تأییدات مثبت:")
+        for c in rec.confirmations_fa:
+            print(f"  • {c}")
+        print("\n⚠️  هشدارهای ریسک:")
+        for r in rec.risks_fa:
             print(f"  • {r}")
-        if signal.warnings_fa:
-            print("\n⚠️  نکات مهم:")
-            for w in signal.warnings_fa:
-                print(f"  • {w}")
 
         print("\nجمع‌بندی:")
-        print(f"  {signal.summary_fa}")
+        print(f"  {rec.summary_fa}")
 
         print("\n" + "-" * 50)
         print(
@@ -170,8 +139,8 @@ def print_trade_signal(symbol: str, signal, lang: str):
         print("-" * 50)
 
 
-def analyze_symbol(symbol: str, fetcher: TSETMCFetcher, db: DatabaseManager, lang: str):
-    """Analyze a single symbol. Returns the TradeSignal on success, or None on failure."""
+def analyze_symbol(symbol: str, fetcher: TSETMCFetcher, db: DatabaseManager, engine: SignalEngine, lang: str):
+    """Analyze a single symbol. Returns the Recommendation on success, or None on failure."""
     if lang == "en":
         print(f"\n🚀 Analyzing: {symbol}\n")
         print("⏳ Fetching data from TSETMC...")
@@ -185,34 +154,28 @@ def analyze_symbol(symbol: str, fetcher: TSETMCFetcher, db: DatabaseManager, lan
         print("❌ No data was retrieved." if lang == "en" else "❌ داده‌ای دریافت نشد.")
         return None
 
-    if lang == "en":
-        print(f"✅ Retrieved {len(df)} trading days.")
-    else:
-        print(f"✅ {len(df)} روز کاری دریافت شد.")
+    print(f"✅ Retrieved {len(df)} trading days." if lang == "en" else f"✅ {len(df)} روز کاری دریافت شد.")
 
     db.save_history(symbol, df)
-    print(
-        "💾 Data saved to SQLite database."
-        if lang == "en"
-        else "💾 داده‌ها ذخیره شدند."
-    )
+    print("💾 Data saved to SQLite database." if lang == "en" else "💾 داده‌ها ذخیره شدند.")
 
     df_analyzed = TechnicalIndicators.apply_all(df)
-    latest = df_analyzed.iloc[-1]
 
-    print_technical_report(symbol, latest, lang)
+    if len(df_analyzed) < MIN_HISTORY_DAYS:
+        msg = (f"⚠️  Not enough history for a multi-factor signal (need {MIN_HISTORY_DAYS}+ days)."
+               if lang == "en" else f"⚠️  داده کافی برای سیگنال چندعاملی نیست (حداقل {MIN_HISTORY_DAYS} روز لازم است).")
+        print(msg)
+        print_technical_report(symbol, df_analyzed.iloc[-1], lang)
+        return None
+
+    print_technical_report(symbol, df_analyzed.iloc[-1], lang)
 
     try:
-        advisor = TradeAdvisor()
-        signal = advisor.generate_signal(df_analyzed, symbol=symbol)
-        print_trade_signal(symbol, signal, lang)
-        return signal
+        rec = engine.generate(df_analyzed, symbol=symbol)
+        print_recommendation(symbol, rec, lang)
+        return rec
     except ValueError as e:
-        print(
-            f"\n⚠️  Trade signal unavailable: {e}"
-            if lang == "en"
-            else f"\n⚠️  سیگنال معاملاتی در دسترس نیست: {e}"
-        )
+        print(f"\n⚠️  Signal unavailable: {e}" if lang == "en" else f"\n⚠️  سیگنال در دسترس نیست: {e}")
         return None
 
 
@@ -220,36 +183,30 @@ def print_batch_summary(results: list, lang: str):
     if len(results) < 2:
         return
 
-    verdict_icons = {"BUY": "🟢", "WATCH": "🟡", "AVOID": "🔴"}
-
     print("\n" + "=" * 50)
     print("📋 Batch Summary" if lang == "en" else "📋 خلاصه گروهی")
     print("=" * 50)
 
     if lang == "en":
-        print(f"{'Symbol':<15}{'Verdict':<12}{'Score':<8}{'Entry Zone'}")
+        print(f"{'Symbol':<15}{'Verdict':<16}{'Confidence':<12}{'Entry Zone'}")
         print("-" * 50)
-        for symbol, signal in results:
-            if signal is None:
-                print(f"{symbol:<15}{'N/A':<12}{'-':<8}-")
+        for symbol, rec in results:
+            if rec is None:
+                print(f"{symbol:<15}{'N/A':<16}{'-':<12}-")
             else:
-                icon = verdict_icons.get(signal.verdict, "")
-                print(
-                    f"{symbol:<15}{icon + ' ' + signal.verdict:<12}"
-                    f"{signal.score:<8}{signal.entry_low:,.0f}–{signal.entry_high:,.0f}"
-                )
+                icon = VERDICT_ICONS.get(rec.verdict, "")
+                print(f"{symbol:<15}{icon + ' ' + rec.verdict_en:<16}{f'{rec.confidence:.0f}%':<12}"
+                      f"{rec.entry_low:,.0f}–{rec.entry_high:,.0f}")
     else:
-        print(f"{'نماد':<15}{'نتیجه':<15}{'امتیاز':<10}{'محدوده ورود'}")
+        print(f"{'نماد':<15}{'نتیجه':<20}{'اطمینان':<12}{'محدوده ورود'}")
         print("-" * 50)
-        for symbol, signal in results:
-            if signal is None:
-                print(f"{symbol:<15}{'بدون داده':<15}{'-':<10}-")
+        for symbol, rec in results:
+            if rec is None:
+                print(f"{symbol:<15}{'بدون داده':<20}{'-':<12}-")
             else:
-                icon = verdict_icons.get(signal.verdict, "")
-                print(
-                    f"{symbol:<15}{icon + ' ' + signal.verdict_fa:<15}"
-                    f"{signal.score:<10}{signal.entry_low:,.0f} تا {signal.entry_high:,.0f}"
-                )
+                icon = VERDICT_ICONS.get(rec.verdict, "")
+                print(f"{symbol:<15}{icon + ' ' + rec.verdict_fa:<20}{f'{rec.confidence:.0f}٪':<12}"
+                      f"{rec.entry_low:,.0f} تا {rec.entry_high:,.0f}")
     print("=" * 50)
 
 
@@ -258,33 +215,25 @@ def main():
 
     fetcher = TSETMCFetcher()
     db = DatabaseManager()
+    engine = SignalEngine()
 
     print("\n" + "=" * 50)
-    print("📈 BourseRadar — TSE Stock Analyzer")
+    print("📈 BourseRadar — Multi-Factor TSE Signal Engine")
     print("=" * 50)
     if lang == "en":
-        print(
-            "Type one symbol, or several separated by spaces, to analyze them (e.g. فملی فولاد خودرو)."
-        )
+        print("Type one symbol, or several separated by spaces, to analyze them (e.g. فملی فولاد خودرو).")
         print(f"Type one of {sorted(EXIT_COMMANDS)} to quit.")
     else:
-        print(
-            "برای تحلیل، یک نماد یا چند نماد را با فاصله جدا کرده وارد کنید (مثال: فملی فولاد خودرو)."
-        )
+        print("برای تحلیل، یک نماد یا چند نماد را با فاصله جدا کرده وارد کنید (مثال: فملی فولاد خودرو).")
         print(f"برای خروج، یکی از این کلمات را وارد کنید: {sorted(EXIT_COMMANDS)}")
 
     while True:
-        prompt = (
-            "\n🔎 Enter symbol(s): " if lang == "en" else "\n🔎 نماد(ها) را وارد کنید: "
-        )
+        prompt = "\n🔎 Enter symbol(s): " if lang == "en" else "\n🔎 نماد(ها) را وارد کنید: "
         raw = input(prompt).strip()
 
         if not raw:
-            print(
-                "❌ No symbol entered. Try again, or type 'exit' to quit."
-                if lang == "en"
-                else "❌ نمادی وارد نشد. دوباره تلاش کنید یا 'خروج' را تایپ کنید."
-            )
+            print("❌ No symbol entered. Try again, or type 'exit' to quit." if lang == "en"
+                  else "❌ نمادی وارد نشد. دوباره تلاش کنید یا 'خروج' را تایپ کنید.")
             continue
 
         if raw.lower() in EXIT_COMMANDS or raw in EXIT_COMMANDS:
@@ -293,27 +242,19 @@ def main():
 
         symbols = parse_symbols(raw)
         if not symbols:
-            print(
-                "❌ Couldn't parse any symbols from that input."
-                if lang == "en"
-                else "❌ نمادی شناسایی نشد."
-            )
+            print("❌ Couldn't parse any symbols from that input." if lang == "en" else "❌ نمادی شناسایی نشد.")
             continue
 
         if len(symbols) > 1:
-            if lang == "en":
-                print(f"\n📦 Batch mode: {len(symbols)} symbols queued")
-            else:
-                print(f"\n📦 حالت گروهی: {len(symbols)} نماد در صف")
+            print(f"\n📦 Batch mode: {len(symbols)} symbols queued" if lang == "en"
+                  else f"\n📦 حالت گروهی: {len(symbols)} نماد در صف")
 
         results = []
         for i, symbol in enumerate(symbols, 1):
             if len(symbols) > 1:
-                print(f"\n{'#' * 50}")
-                print(f"[{i}/{len(symbols)}] {symbol}")
-                print(f"{'#' * 50}")
-            signal = analyze_symbol(symbol, fetcher, db, lang)
-            results.append((symbol, signal))
+                print(f"\n{'#' * 50}\n[{i}/{len(symbols)}] {symbol}\n{'#' * 50}")
+            rec = analyze_symbol(symbol, fetcher, db, engine, lang)
+            results.append((symbol, rec))
 
         print_batch_summary(results, lang)
 
