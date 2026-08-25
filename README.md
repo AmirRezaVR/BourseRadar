@@ -2,26 +2,21 @@
 
 A small Python tool I built to stop eyeballing charts every morning.
 
-It pulls real price data for Tehran Stock Exchange stocks, runs a handful of standard technical indicators on them, and gives me a plain answer — buy, wait, or skip — along with a suggested entry price, a stop-loss, and a target. It explains its reasoning in both English and Persian, so it's easy to double-check that the logic actually makes sense before acting on it.
+You give it a Tehran Stock Exchange symbol, it pulls the real price history, runs it through a handful of technical factors, and hands you back a plain answer: strong buy, buy, hold, sell, or strong sell, with a confidence percentage attached — plus a suggested entry price, stop-loss, and target. It also explains itself: every factor it checked, what it found, and how much weight it carried, so you can see whether the logic makes sense before acting on it.
 
-That's it. It's not a trading bot, it doesn't place orders, and it doesn't know anything about a company's fundamentals or the news — just price, volume, and a few well-known indicators.
+It's not a trading bot, it doesn't place orders, and it has no idea what a company's earnings look like or what's in the news. Just price, volume, and a few well-known indicators, weighed against each other.
 
-## What it does
+## What it's like to use
 
-- You type a symbol (`فملی`, `فولاد`, whatever) — no need to look up a code, it searches TSETMC for you
-- It fetches the price history and saves it locally, so you're not re-downloading the same data every time
-- It calculates SMA, EMA, RSI, MACD, and ATR
-- It turns those numbers into a short-term swing-trade read: buy zone, stop-loss, target, and a plain-language explanation of why — in English and Persian
-- It keeps running so you can check several symbols in one sitting, and exits cleanly when you tell it to
+You type a symbol — `فملی`, `فولاد`, whatever — and it looks it up for you, no ticker code memorized. Want to check a few at once? Space them out and it'll run through all of them, then give you a summary table.
 
-## What it doesn't do (yet, or maybe ever)
+Behind the scenes, it weighs five things against each other — RSI, MACD, moving-average trend alignment, volume, and where price sits relative to recent support and resistance — instead of leaning on any single indicator. Volatility works differently: it doesn't push the verdict one way or the other, but it knocks the confidence number down when things get unusually choppy.
 
-- No fundamentals, no news, no sentiment
-- No charts — right now it's just text in your terminal
-- No portfolio tracking — it looks at one symbol at a time, not "how is my overall position doing"
-- No real-time streaming — it's daily data, checked when you ask for it
+First run, it asks whether you want English or Persian, and that's what you get from then on. It keeps running until you tell it to stop (`exit`, `quit`, `q`, `خروج`, `پایان`), so you can work through a watchlist in one sitting.
 
-Some of these are planned. Some might just stay out of scope on purpose, since the goal was a fast, honest second opinion — not a full trading platform.
+## What it doesn't do
+
+No fundamentals, no news, no sentiment. No divergence detection or order-book data yet, though that's on the list. No charts — plain text in a terminal for now. No portfolio tracking, so it won't tell you how your overall holdings are doing, only what it thinks of one symbol at a time. No real-time streaming — daily data, checked whenever you ask.
 
 ## Getting started
 
@@ -36,15 +31,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Then just type a symbol when it asks. Type `exit` or `خروج` when you're done.
+It'll ask which language you want, then just start typing symbols.
 
-## An honest note on the data
+## A couple of honest notes
 
-TSETMC doesn't publish an official API. This project talks to endpoints that were found and reverse-engineered by inspecting real responses — not from documentation, because there isn't any. That means things can break without warning if TSETMC changes something on their end. If a symbol suddenly stops working, that's usually why.
+TSETMC doesn't publish an official API, so this talks to endpoints I found by inspecting real responses, not documentation — because there isn't any. If a symbol suddenly stops working, that's probably why.
 
-## And an honest note on the advice part
-
-The buy/wait/skip suggestion is a rule-based calculation, not a prediction. It looks at trend, momentum, and volatility, and tells you what those specific numbers imply — nothing more. It can be wrong. It doesn't know about earnings reports, sanctions news, or anything happening outside the price chart. Treat it as one input, not a verdict.
+The recommendation is a calculation, not a prediction. It weighs trend, momentum, volume, and volatility and tells you what that combination adds up to — nothing more. It's blind to earnings reports, sanctions news, or anything else happening outside the price chart. Treat it as one opinion in the room, not the final word.
 
 ## Project layout
 
@@ -55,7 +48,15 @@ bourseradar/
 │   ├── database.py          # saves and reads price history
 │   ├── tsetmc_fetcher.py    # talks to TSETMC
 │   ├── indicators.py        # SMA, EMA, RSI, MACD, ATR
-│   └── trade_advisor.py     # turns indicators into a buy/wait/skip read
+│   └── signal_engine.py     # weighs the indicators into a scored recommendation
 ├── main.py                  # run this
 └── requirements.txt
 ```
+
+## Where this is headed
+
+Divergence detection and some TSE-specific signals (order-book, buyer/seller money flow) are next. After that, backtesting against real historical data, so the confidence numbers mean something proven, not just internally consistent.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
