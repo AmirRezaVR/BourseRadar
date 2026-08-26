@@ -1,8 +1,18 @@
 import pandas as pd
+from datetime import datetime
 from src.tsetmc_fetcher import TSETMCFetcher
 from src.database import DatabaseManager
 from src.indicators import TechnicalIndicators
 from src.signal_engine import SignalEngine, VERDICT_ICONS, MIN_HISTORY_DAYS
+
+try:
+    from zoneinfo import ZoneInfo
+    IRAN_TZ = ZoneInfo("Asia/Tehran")
+except Exception:
+    # zoneinfo needs the 'tzdata' package on some systems (notably Windows).
+    # If it's missing, fall back to naive local time rather than crashing -
+    # the timestamp is still useful, just not guaranteed to be Iran time.
+    IRAN_TZ = None
 
 EXIT_COMMANDS = {"exit", "quit", "q", "خروج", "پایان"}
 SEPARATORS = ["،", ";", "؛", ","]  # accepted alongside the primary space separator
@@ -11,6 +21,23 @@ LANG_CHOICES = {
     "1": "en", "en": "en", "english": "en",
     "2": "fa", "fa": "fa", "farsi": "fa", "persian": "fa", "فارسی": "fa",
 }
+
+
+def get_fetch_timestamp(lang: str) -> str:
+    """
+    A human-readable 'this is exactly when the data was pulled' timestamp,
+    in Iran time when possible (falls back to local system time with a
+    note if the 'tzdata' package isn't installed).
+    """
+    if IRAN_TZ is not None:
+        now = datetime.now(IRAN_TZ)
+        formatted = now.strftime("%Y-%m-%d %H:%M:%S")
+        return f"{formatted} (Iran time)" if lang == "en" else f"{formatted} (به وقت ایران)"
+    else:
+        now = datetime.now()
+        formatted = now.strftime("%Y-%m-%d %H:%M:%S")
+        return f"{formatted} (local system time - install 'tzdata' for Iran time)" if lang == "en" \
+            else f"{formatted} (زمان سیستم محلی — برای وقت ایران، پکیج 'tzdata' را نصب کنید)"
 
 
 def choose_language() -> str:
@@ -40,7 +67,7 @@ def parse_symbols(raw: str) -> list:
     return unique_parts
 
 
-def print_technical_report(symbol: str, latest: pd.Series, lang: str):
+def print_technical_report(symbol: str, latest: pd.Series, lang: str, fetch_ts: str = None):
     sma20, ema20, ema50 = latest["SMA_20"], latest["EMA_20"], latest["EMA_50"]
     rsi, macd, macd_signal, atr = latest["RSI_14"], latest["MACD"], latest["MACD_Signal"], latest["ATR_14"]
 
@@ -48,7 +75,9 @@ def print_technical_report(symbol: str, latest: pd.Series, lang: str):
     if lang == "en":
         print(f"📊 Technical Report — {symbol}")
         print("=" * 50)
-        print(f"📅 Last trade date: {latest['date']}")
+        print(f"📅 Last trade date (per TSETMC): {latest['date']}")
+        if fetch_ts:
+            print(f"🕒 You fetched this data at: {fetch_ts}")
         print(f"🔹 Closing price: {latest['close_price']:,.0f} Rial")
         print(f"🔹 SMA 20: {sma20:,.0f}" if not pd.isna(sma20) else "🔹 SMA 20: -")
         print(f"🔹 EMA 20: {ema20:,.0f}" if not pd.isna(ema20) else "🔹 EMA 20: -")
@@ -59,7 +88,9 @@ def print_technical_report(symbol: str, latest: pd.Series, lang: str):
     else:
         print(f"📊 گزارش فنی — {symbol}")
         print("=" * 50)
-        print(f"📅 تاریخ آخرین معامله: {latest['date']}")
+        print(f"📅 تاریخ آخرین معامله (طبق TSETMC): {latest['date']}")
+        if fetch_ts:
+            print(f"🕒 زمان دریافت این داده توسط شما: {fetch_ts}")
         print(f"🔹 قیمت پایانی: {latest['close_price']:,.0f} ریال")
         print(f"🔹 میانگین متحرک ساده ۲۰ روزه (SMA20): {sma20:,.0f}" if not pd.isna(sma20) else "🔹 SMA 20: -")
         print(f"🔹 میانگین متحرک نمایی ۲۰ روزه (EMA20): {ema20:,.0f}" if not pd.isna(ema20) else "🔹 EMA 20: -")
@@ -155,6 +186,7 @@ def analyze_symbol(symbol: str, fetcher: TSETMCFetcher, db: DatabaseManager, eng
         return None
 
     print(f"✅ Retrieved {len(df)} trading days." if lang == "en" else f"✅ {len(df)} روز کاری دریافت شد.")
+    fetch_ts = get_fetch_timestamp(lang)
 
     db.save_history(symbol, df)
     print("💾 Data saved to SQLite database." if lang == "en" else "💾 داده‌ها ذخیره شدند.")
@@ -165,13 +197,18 @@ def analyze_symbol(symbol: str, fetcher: TSETMCFetcher, db: DatabaseManager, eng
         msg = (f"⚠️  Not enough history for a multi-factor signal (need {MIN_HISTORY_DAYS}+ days)."
                if lang == "en" else f"⚠️  داده کافی برای سیگنال چندعاملی نیست (حداقل {MIN_HISTORY_DAYS} روز لازم است).")
         print(msg)
-        print_technical_report(symbol, df_analyzed.iloc[-1], lang)
+        print_technical_report(symbol, df_analyzed.iloc[-1], lang, fetch_ts=fetch_ts)
         return None
 
-    print_technical_report(symbol, df_analyzed.iloc[-1], lang)
+    print_technical_report(symbol, df_analyzed.iloc[-1], lang, fetch_ts=fetch_ts)
+
+    print("📡 Fetching order book..." if lang == "en" else "📡 در حال دریافت اطلاعات تابلو...")
+    order_book_raw = fetcher.fetch_order_book(symbol)
+    if not order_book_raw:
+        print("   (unavailable - market may be closed)" if lang == "en" else "   (در دسترس نیست — احتمالاً بازار بسته است)")
 
     try:
-        rec = engine.generate(df_analyzed, symbol=symbol)
+        rec = engine.generate(df_analyzed, symbol=symbol, order_book_raw=order_book_raw)
         print_recommendation(symbol, rec, lang)
         return rec
     except ValueError as e:

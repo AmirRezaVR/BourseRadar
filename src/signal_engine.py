@@ -1,20 +1,49 @@
+"""
+Multi-factor signal scoring engine (v2).
+
+Five independent, weighted DIRECTIONAL factors combine into a composite
+score in [-1, 1]:
+    RSI, MACD, Moving-Average trend alignment, Volume confirmation,
+    Support/Resistance position.
+
+Volatility is deliberately NOT a sixth directional factor. It doesn't tell
+you whether to lean bullish or bearish - it tells you how much to trust
+whatever direction the other factors point to. So it's applied as a
+confidence MULTIPLIER on the composite score instead: high volatility
+shrinks confidence toward neutral without ever flipping direction. This is
+a design correction from an earlier version, where volatility was folded
+into the weighted sum as a bipolar score and it turned out to add a small
+persistent negative bias on undirected data - technically correct in
+isolation, but not the right shape for what volatility actually represents.
+
+Every factor's scoring buckets are DELIBERATELY SYMMETRIC around neutral
+(score(mirror_input) == -score(input)), verified with a dedicated bias
+test (see test suite) rather than assumed. This matters: an earlier
+version of this engine had ~3x more bullish-scoring states than bearish
+ones in one factor, which silently biased every recommendation toward
+"Buy" regardless of the actual data.
+"""
+
 import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
+from src.order_book import OrderBookAnalyzer, OrderBookSnapshot
+
 
 @dataclass
 class SignalWeights:
-    """Weights for the five directional factors. Must sum to 100."""
-    rsi: float = 20
-    macd: float = 25
-    ma_trend: float = 25
-    volume: float = 15
-    support_resistance: float = 15
+    """Weights for the six directional factors. Must sum to 100."""
+    rsi: float = 18
+    macd: float = 22
+    ma_trend: float = 22
+    volume: float = 12
+    support_resistance: float = 12
+    order_book: float = 14
 
     def total(self) -> float:
-        return self.rsi + self.macd + self.ma_trend + self.volume + self.support_resistance
+        return self.rsi + self.macd + self.ma_trend + self.volume + self.support_resistance + self.order_book
 
     def __post_init__(self):
         if abs(self.total() - 100) > 0.01:
@@ -31,6 +60,8 @@ class SignalThresholds:
 class VolatilityConfig:
     expansion_ratio: float = 1.5     # ATR% > 1.5x its own 60-day average -> volatility expansion
     expansion_multiplier: float = 0.7  # confidence is scaled by this much when expanding
+    # Contraction (calm markets) deliberately does NOT boost confidence above 1.0 -
+    # a quiet market isn't evidence the signal is MORE trustworthy, just that it's quiet.
 
 
 VERDICT_LABELS = {
@@ -49,10 +80,11 @@ class FactorResult:
     name: str
     label_en: str
     label_fa: str
-    score: float
+    score: float   # -1 (bearish) .. +1 (bullish)
     weight: float
     reason_en: str
     reason_fa: str
+    available: bool = True  # False = excluded from composite (not just zeroed)
 
     @property
     def weighted_contribution(self) -> float:
@@ -66,9 +98,9 @@ class Recommendation:
     verdict: str
     verdict_en: str
     verdict_fa: str
-    confidence: float
-    composite_score: float
-    raw_composite_score: float
+    confidence: float          # 0-100, AFTER the volatility multiplier is applied
+    composite_score: float     # -1..1, final (post-multiplier) value used for classification
+    raw_composite_score: float  # -1..1, BEFORE the volatility multiplier - shown for transparency
 
     current_price: float
     entry_low: float
@@ -92,6 +124,13 @@ class Recommendation:
 
 
 class SignalEngine:
+    """
+    NOT financial advice. A deterministic, rule-based reading of price,
+    volume, and momentum only - no fundamentals, no news, no market-wide
+    context. TSE retail accounts generally can't short-sell, so Sell/Strong
+    Sell should be read as "avoid new entries / consider exiting an
+    existing position", not a short-entry instruction.
+    """
 
     ATR_STOP_MULTIPLIER = 1.5
     MAX_STOP_DISTANCE_PCT = 0.08
@@ -104,7 +143,10 @@ class SignalEngine:
         self.weights = weights or SignalWeights()
         self.thresholds = thresholds or SignalThresholds()
         self.volatility_cfg = volatility_cfg or VolatilityConfig()
+        self.order_book_analyzer = OrderBookAnalyzer()
 
+        # Registry pattern: adding a factor later means adding one method
+        # here and one weight field above - nothing else changes.
         self.FACTOR_METHODS = [
             ("rsi", self._score_rsi),
             ("macd", self._score_macd),
@@ -113,7 +155,9 @@ class SignalEngine:
             ("support_resistance", self._score_support_resistance),
         ]
 
-
+    # ------------------------------------------------------------------
+    # Directional factors - every bucket set is symmetric by construction.
+    # ------------------------------------------------------------------
 
     def _score_rsi(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         rsi = latest.get("RSI_14")
@@ -166,7 +210,9 @@ class SignalEngine:
             return FactorResult("ma_trend", "Moving Average Alignment", "همراستایی میانگین‌های متحرک", 0.0, weight,
                                  "Moving averages unavailable.", "میانگین‌های متحرک در دسترس نیستند.")
 
-
+        # Additive model: two independent +/-0.5 sub-signals. This is symmetric
+        # by construction, unlike an earlier ad-hoc 4-case bucket that gave
+        # 3 of 4 states a positive score.
         short_term = 0.5 if close > ema20 else -0.5
         medium_term = 0.5 if ema20 > ema50 else -0.5
         score = short_term + medium_term
@@ -233,6 +279,9 @@ class SignalEngine:
 
         return FactorResult("support_resistance", "Support/Resistance Position", "موقعیت نسبت به حمایت/مقاومت", score, weight, en, fa)
 
+    # ------------------------------------------------------------------
+    # Volatility: confidence modifier, not a directional vote.
+    # ------------------------------------------------------------------
 
     def _volatility_multiplier(self, df: pd.DataFrame, latest: pd.Series) -> tuple:
         atr = latest.get("ATR_14")
@@ -256,6 +305,7 @@ class SignalEngine:
 
         return 1.0, "Volatility is within its normal historical range.", "نوسانات در محدوده عادی تاریخی است."
 
+    # ------------------------------------------------------------------
 
     def _classify(self, composite: float) -> str:
         if composite >= self.thresholds.strong:
@@ -295,7 +345,8 @@ class SignalEngine:
 
         return dict(entry_low=entry_low, entry_high=entry_high, stop_loss=stop_loss, target=target, risk_reward_ratio=rr)
 
-    def generate(self, df: pd.DataFrame, symbol: Optional[str] = None) -> Recommendation:
+    def generate(self, df: pd.DataFrame, symbol: Optional[str] = None,
+                 order_book_raw: Optional[dict] = None) -> Recommendation:
         if df.empty or len(df) < MIN_HISTORY_DAYS:
             raise ValueError(
                 f"Not enough price history (need {MIN_HISTORY_DAYS}+ trading days). / "
@@ -306,7 +357,26 @@ class SignalEngine:
         name, name_fa = symbol or "This stock", symbol or "این سهم"
 
         factors = [method(df, latest) for _, method in self.FACTOR_METHODS]
-        raw_composite = sum(f.weighted_contribution for f in factors) / self.weights.total()
+
+        order_book_snapshot = None
+        if order_book_raw:
+            order_book_snapshot = self.order_book_analyzer.parse(name, order_book_raw)
+        ob_reading = self.order_book_analyzer.analyze(order_book_snapshot, weight=self.weights.order_book)
+        factors.append(FactorResult(
+            "order_book", "Order Book (Bid/Ask)", "تابلو (عرضه و تقاضا)",
+            ob_reading.score, ob_reading.weight, ob_reading.reason_en, ob_reading.reason_fa,
+            available=ob_reading.available,
+        ))
+
+        # Composite is a weighted average over only the AVAILABLE factors -
+        # an unavailable factor (e.g. no order book snapshot) is excluded
+        # from both numerator and denominator, not silently zeroed with
+        # full weight still counted (which would just dilute confidence
+        # for a reason that has nothing to do with the actual data).
+        available_factors = [f for f in factors if f.available]
+        available_weight = sum(f.weight for f in available_factors)
+        raw_composite = (sum(f.weighted_contribution for f in available_factors) / available_weight
+                          if available_weight > 0 else 0.0)
         raw_composite = max(-1.0, min(1.0, raw_composite))
 
         vol_multiplier, vol_reason_en, vol_reason_fa = self._volatility_multiplier(df, latest)
