@@ -1,24 +1,3 @@
-"""
-Order book (best-limits) analysis.
-
-TSETMC's BestLimits endpoint returns up to 5 price levels of bid/ask data.
-Confirmed field names (from a real captured response):
-    pMeDem   = bid price          qTitMeDem = bid volume    zOrdMeDem = bid order count
-    pMeOf    = ask price          qTitMeOf  = ask volume    zOrdMeOf  = ask order count
-
-This is LIVE, single-snapshot data - there's no historical series to check
-for the kind of bias we tested on the price-based factors. What we CAN and
-do verify is that the scoring math itself is symmetric by construction
-(heavy bid-side imbalance and heavy ask-side imbalance produce mirror-image
-scores) - see the test suite.
-
-On "queue lock" (صف خرید/فروش): a genuinely confirmed queue lock requires
-knowing the instrument's daily regulatory price band, which this app
-doesn't currently fetch. What's implemented here is an approximation based
-purely on how one-sided the visible order book is - flagged clearly as
-approximate, not a confirmed queue state.
-"""
-
 import math
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -59,22 +38,23 @@ class OrderBookSnapshot:
 
 @dataclass
 class OrderBookReading:
-    score: float           # -1 (heavy sell pressure) .. +1 (heavy buy pressure)
+    score: float  # -1 (heavy sell pressure) .. +1 (heavy buy pressure)
     weight: float
     bid_ask_ratio: float
     spread_pct: Optional[float]
-    likely_queue: Optional[str]  # "buy", "sell", or None - approximate, see module docstring
+    likely_queue: Optional[
+        str
+    ]  # "buy", "sell", or None - approximate, see module docstring
     reason_en: str
     reason_fa: str
     available: bool = True
 
 
 class OrderBookAnalyzer:
-    # Every doubling of the bid:ask volume ratio moves the score by 1/RATIO_SCALE.
-    # log2(ratio)/RATIO_SCALE, clamped to [-1, 1] - symmetric by construction.
+
     RATIO_SCALE = 3.0
-    QUEUE_VOLUME_DOMINANCE = 50.0   # one side outweighs the other by this multiple
-    QUEUE_MAX_OPPOSING_ORDERS = 2   # and the weak side has this few orders or fewer
+    QUEUE_VOLUME_DOMINANCE = 50.0
+    QUEUE_MAX_OPPOSING_ORDERS = 2  
 
     def parse(self, symbol: str, raw: dict) -> Optional[OrderBookSnapshot]:
         best_limits = raw.get("bestLimits") if raw else None
@@ -84,11 +64,17 @@ class OrderBookAnalyzer:
         levels = []
         for row in best_limits:
             try:
-                levels.append(OrderBookLevel(
-                    level=row.get("number", 0),
-                    bid_price=float(row["pMeDem"]), bid_volume=int(row["qTitMeDem"]), bid_orders=int(row["zOrdMeDem"]),
-                    ask_price=float(row["pMeOf"]), ask_volume=int(row["qTitMeOf"]), ask_orders=int(row["zOrdMeOf"]),
-                ))
+                levels.append(
+                    OrderBookLevel(
+                        level=row.get("number", 0),
+                        bid_price=float(row["pMeDem"]),
+                        bid_volume=int(row["qTitMeDem"]),
+                        bid_orders=int(row["zOrdMeDem"]),
+                        ask_price=float(row["pMeOf"]),
+                        ask_volume=int(row["qTitMeOf"]),
+                        ask_orders=int(row["zOrdMeOf"]),
+                    )
+                )
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -97,10 +83,16 @@ class OrderBookAnalyzer:
         levels.sort(key=lambda l: l.level)
         return OrderBookSnapshot(symbol=symbol, levels=levels)
 
-    def analyze(self, snapshot: Optional[OrderBookSnapshot], weight: float = 14.0) -> OrderBookReading:
+    def analyze(
+        self, snapshot: Optional[OrderBookSnapshot], weight: float = 14.0
+    ) -> OrderBookReading:
         if snapshot is None or not snapshot.levels:
             return OrderBookReading(
-                score=0.0, weight=weight, bid_ask_ratio=1.0, spread_pct=None, likely_queue=None,
+                score=0.0,
+                weight=weight,
+                bid_ask_ratio=1.0,
+                spread_pct=None,
+                likely_queue=None,
                 available=False,
                 reason_en="Order book unavailable (market may be closed, or the fetch failed).",
                 reason_fa="اطلاعات تابلو در دسترس نیست (احتمالاً بازار بسته است یا دریافت داده ناموفق بود).",
@@ -120,21 +112,35 @@ class OrderBookAnalyzer:
 
         likely_queue = None
         top = snapshot.levels[0]
-        if total_bid >= self.QUEUE_VOLUME_DOMINANCE * max(total_ask, 1) and top.ask_orders <= self.QUEUE_MAX_OPPOSING_ORDERS:
+        if (
+            total_bid >= self.QUEUE_VOLUME_DOMINANCE * max(total_ask, 1)
+            and top.ask_orders <= self.QUEUE_MAX_OPPOSING_ORDERS
+        ):
             likely_queue = "buy"
-        elif total_ask >= self.QUEUE_VOLUME_DOMINANCE * max(total_bid, 1) and top.bid_orders <= self.QUEUE_MAX_OPPOSING_ORDERS:
+        elif (
+            total_ask >= self.QUEUE_VOLUME_DOMINANCE * max(total_bid, 1)
+            and top.bid_orders <= self.QUEUE_MAX_OPPOSING_ORDERS
+        ):
             likely_queue = "sell"
 
         if likely_queue == "buy":
-            en = (f"Order book heavily bid-dominated ({ratio:.1f}x ask volume) with almost no sellers - "
-                  f"looks like a possible buy queue (صف خرید), though this isn't confirmed against the official price band.")
-            fa = (f"تابلو به‌شدت سمت خرید سنگین است (نسبت {ratio:.1f} برابر حجم فروش) با فروشنده تقریباً صفر — "
-                  f"احتمال صف خرید وجود دارد، هرچند این تشخیص با دامنه رسمی نوسان قیمت تأیید نشده است.")
+            en = (
+                f"Order book heavily bid-dominated ({ratio:.1f}x ask volume) with almost no sellers - "
+                f"looks like a possible buy queue (صف خرید), though this isn't confirmed against the official price band."
+            )
+            fa = (
+                f"تابلو به‌شدت سمت خرید سنگین است (نسبت {ratio:.1f} برابر حجم فروش) با فروشنده تقریباً صفر — "
+                f"احتمال صف خرید وجود دارد، هرچند این تشخیص با دامنه رسمی نوسان قیمت تأیید نشده است."
+            )
         elif likely_queue == "sell":
-            en = (f"Order book heavily ask-dominated ({1/ratio:.1f}x bid volume) with almost no buyers - "
-                  f"looks like a possible sell queue (صف فروش), though this isn't confirmed against the official price band.")
-            fa = (f"تابلو به‌شدت سمت فروش سنگین است (نسبت {1/ratio:.1f} برابر حجم خرید) با خریدار تقریباً صفر — "
-                  f"احتمال صف فروش وجود دارد، هرچند این تشخیص با دامنه رسمی نوسان قیمت تأیید نشده است.")
+            en = (
+                f"Order book heavily ask-dominated ({1/ratio:.1f}x bid volume) with almost no buyers - "
+                f"looks like a possible sell queue (صف فروش), though this isn't confirmed against the official price band."
+            )
+            fa = (
+                f"تابلو به‌شدت سمت فروش سنگین است (نسبت {1/ratio:.1f} برابر حجم خرید) با خریدار تقریباً صفر — "
+                f"احتمال صف فروش وجود دارد، هرچند این تشخیص با دامنه رسمی نوسان قیمت تأیید نشده است."
+            )
         elif ratio >= 2:
             en = f"Bid volume outweighs ask volume {ratio:.1f}x - more buying interest visible than selling."
             fa = f"حجم خرید {ratio:.1f} برابر حجم فروش است — تقاضای بیشتری نسبت به عرضه در تابلو دیده می‌شود."
@@ -146,7 +152,12 @@ class OrderBookAnalyzer:
             fa = "تابلو از نظر حجم خرید و فروش تقریباً متعادل است."
 
         return OrderBookReading(
-            score=score, weight=weight, bid_ask_ratio=round(ratio, 2),
+            score=score,
+            weight=weight,
+            bid_ask_ratio=round(ratio, 2),
             spread_pct=round(spread_pct, 4) if spread_pct is not None else None,
-            likely_queue=likely_queue, reason_en=en, reason_fa=fa, available=True,
+            likely_queue=likely_queue,
+            reason_en=en,
+            reason_fa=fa,
+            available=True,
         )
