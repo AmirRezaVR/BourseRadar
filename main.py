@@ -1,13 +1,8 @@
 import pandas as pd
 from src.tsetmc_fetcher import TSETMCFetcher
 from src.database import DatabaseManager
-from src.signal_engine import SignalEngine, VERDICT_ICONS, MIN_HISTORY_DAYS
-from src.analysis_service import (
-    analyze_symbol_core,
-    get_fetch_timestamp,
-    iran_time_available,
-    parse_symbols,
-)
+from src.signal_engine import SignalEngine, VERDICT_ICONS
+from src.analysis_service import analyze_symbol_core, parse_symbols
 
 EXIT_COMMANDS = {"exit", "quit", "q", "خروج", "پایان"}
 
