@@ -1,9 +1,8 @@
 import pandas as pd
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from typing import List, Optional
 
-from src.order_book import OrderBookAnalyzer, OrderBookSnapshot
+from src.order_book import OrderBookAnalyzer
 from src.money_flow import MoneyFlowAnalyzer
 
 
@@ -69,13 +68,11 @@ MIN_HISTORY_DAYS = 60
 
 @dataclass
 class FactorResult:
+    """Just enough to compute the composite score - no display text, since nothing reads it anymore."""
+
     name: str
-    label_en: str
-    label_fa: str
     score: float
     weight: float
-    reason_en: str
-    reason_fa: str
     available: bool = True
 
     @property
@@ -85,18 +82,13 @@ class FactorResult:
 
 @dataclass
 class Recommendation:
+    """Trimmed to exactly what main.py's short-mode output reads. Nothing here is unused."""
+
     symbol: str
-    generated_at: str
     verdict: str
     verdict_en: str
     verdict_fa: str
-    confidence: float  # 0-100, AFTER the volatility multiplier is applied
-    composite_score: (
-        float  # -1..1, final (post-multiplier) value used for classification
-    )
-    raw_composite_score: (
-        float  # -1..1, BEFORE the volatility multiplier - shown for transparency
-    )
+    confidence: float
 
     current_price: float
     entry_low: float
@@ -104,19 +96,6 @@ class Recommendation:
     stop_loss: float
     target: float
     risk_reward_ratio: float
-
-    factors: List[FactorResult] = field(default_factory=list)
-    volatility_multiplier: float = 1.0
-    volatility_reason_en: str = ""
-    volatility_reason_fa: str = ""
-
-    confirmations_en: List[str] = field(default_factory=list)
-    confirmations_fa: List[str] = field(default_factory=list)
-    risks_en: List[str] = field(default_factory=list)
-    risks_fa: List[str] = field(default_factory=list)
-
-    summary_en: str = ""
-    summary_fa: str = ""
 
 
 class SignalEngine:
@@ -138,8 +117,6 @@ class SignalEngine:
         self.order_book_analyzer = OrderBookAnalyzer()
         self.money_flow_analyzer = MoneyFlowAnalyzer()
 
-        # Registry pattern: adding a factor later means adding one method
-        # here and one weight field above - nothing else changes.
         self.FACTOR_METHODS = [
             ("rsi", self._score_rsi),
             ("macd", self._score_macd),
@@ -152,119 +129,45 @@ class SignalEngine:
         rsi = latest.get("RSI_14")
         weight = self.weights.rsi
         if pd.isna(rsi):
-            return FactorResult(
-                "rsi",
-                "RSI",
-                "RSI",
-                0.0,
-                weight,
-                "RSI unavailable.",
-                "RSI در دسترس نیست.",
-            )
+            return FactorResult("rsi", 0.0, weight)
 
         if rsi > 80:
-            score, en, fa = (
-                -0.3,
-                f"RSI ({rsi:.1f}) extremely overbought - stretched, reversal risk rising.",
-                f"RSI ({rsi:.1f}) اشباع خرید شدید — ریسک بازگشت بالا.",
-            )
+            score = -0.3
         elif rsi > 70:
-            score, en, fa = (
-                0.3,
-                f"RSI ({rsi:.1f}) overbought but still reflects real bullish momentum.",
-                f"RSI ({rsi:.1f}) اشباع خرید اما همچنان نشان‌دهنده مومنتوم صعودی واقعی.",
-            )
+            score = 0.3
         elif rsi >= 55:
-            score, en, fa = (
-                0.6,
-                f"RSI ({rsi:.1f}) shows healthy bullish momentum.",
-                f"RSI ({rsi:.1f}) نشان‌دهنده مومنتوم صعودی سالم.",
-            )
+            score = 0.6
         elif rsi > 45:
-            score, en, fa = (
-                0.0,
-                f"RSI ({rsi:.1f}) is neutral.",
-                f"RSI ({rsi:.1f}) خنثی است.",
-            )
+            score = 0.0
         elif rsi >= 30:
-            score, en, fa = (
-                -0.6,
-                f"RSI ({rsi:.1f}) shows weakening, bearish momentum.",
-                f"RSI ({rsi:.1f}) نشان‌دهنده مومنتوم نزولی.",
-            )
+            score = -0.6
         elif rsi >= 20:
-            score, en, fa = (
-                -0.3,
-                f"RSI ({rsi:.1f}) oversold but still reflects real bearish momentum.",
-                f"RSI ({rsi:.1f}) اشباع فروش اما همچنان نزولی.",
-            )
+            score = -0.3
         else:
-            score, en, fa = (
-                0.3,
-                f"RSI ({rsi:.1f}) extremely oversold - stretched, bounce risk rising.",
-                f"RSI ({rsi:.1f}) اشباع فروش شدید — ریسک بازگشت رو به بالا.",
-            )
+            score = 0.3
 
-        return FactorResult(
-            "rsi",
-            "RSI (Overbought/Oversold)",
-            "RSI (اشباع خرید/فروش)",
-            score,
-            weight,
-            en,
-            fa,
-        )
+        return FactorResult("rsi", score, weight)
 
     def _score_macd(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         weight = self.weights.macd
         macd, signal = latest.get("MACD"), latest.get("MACD_Signal")
         if pd.isna(macd) or pd.isna(signal) or len(df) < 4:
-            return FactorResult(
-                "macd",
-                "MACD",
-                0.0,
-                weight,
-                "MACD unavailable.",
-                "در دسترس نیست MACD",
-            )
+            return FactorResult("macd", 0.0, weight)
 
         hist_recent = df["MACD_Hist"].tail(3)
         hist_up = hist_recent.diff().mean() > 0 if len(hist_recent) >= 2 else False
         bullish_cross = macd > signal
 
         if bullish_cross and hist_up:
-            score, en, fa = (
-                1.0,
-                "MACD above signal, histogram expanding - strong bullish momentum.",
-                "MACD بالای خط سیگنال، هیستوگرام در حال رشد — مومنتوم صعودی قوی.",
-            )
+            score = 1.0
         elif bullish_cross and not hist_up:
-            score, en, fa = (
-                0.5,
-                "MACD above signal, but momentum leveling off.",
-                "MACD بالای خط سیگنال، اما شتاب کاهش می‌یابد.",
-            )
+            score = 0.5
         elif not bullish_cross and hist_up:
-            score, en, fa = (
-                -0.5,
-                "MACD below signal but the gap is narrowing - weakening bearish momentum.",
-                "MACD زیر خط سیگنال اما فاصله کم می‌شود — مومنتوم نزولی تضعیف می‌شود.",
-            )
+            score = -0.5
         else:
-            score, en, fa = (
-                -1.0,
-                "MACD below signal, histogram falling - strong bearish momentum.",
-                "MACD زیر خط سیگنال، هیستوگرام در حال افت — مومنتوم نزولی قوی.",
-            )
+            score = -1.0
 
-        return FactorResult(
-            "macd",
-            "MACD (Trend & Crossover)",
-            score,
-            weight,
-            en,
-            fa,
-        )
+        return FactorResult("macd", score, weight)
 
     def _score_ma_trend(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         weight = self.weights.ma_trend
@@ -274,50 +177,13 @@ class SignalEngine:
             latest.get("EMA_50"),
         )
         if pd.isna(ema20) or pd.isna(ema50):
-            return FactorResult(
-                "ma_trend",
-                "Moving Average Alignment",
-                "همراستایی میانگین‌های متحرک",
-                0.0,
-                weight,
-                "Moving averages unavailable.",
-                "میانگین‌های متحرک در دسترس نیستند.",
-            )
+            return FactorResult("ma_trend", 0.0, weight)
 
         short_term = 0.5 if close > ema20 else -0.5
         medium_term = 0.5 if ema20 > ema50 else -0.5
         score = short_term + medium_term
 
-        if score == 1.0:
-            en, fa = (
-                "Full bullish alignment: price > EMA20 > EMA50.",
-                "همراستایی کامل صعودی: قیمت > EMA20 > EMA50.",
-            )
-        elif score == -1.0:
-            en, fa = (
-                "Full bearish alignment: price < EMA20 < EMA50.",
-                "همراستایی کامل نزولی: قیمت < EMA20 < EMA50.",
-            )
-        elif short_term > 0:
-            en, fa = (
-                "Mixed: price reclaimed EMA20, but EMA50 (medium-term) hasn't confirmed yet.",
-                "ترکیبی: قیمت بالای EMA20، اما EMA50 هنوز تأیید نکرده.",
-            )
-        else:
-            en, fa = (
-                "Mixed: price below EMA20 despite EMA20 still above EMA50 - pullback in a fading uptrend.",
-                "ترکیبی: قیمت زیر EMA20 با وجود EMA20 بالای EMA50 — اصلاح در روند صعودی رو به تضعیف.",
-            )
-
-        return FactorResult(
-            "ma_trend",
-            "Moving Average Alignment",
-            "همراستایی میانگین‌های متحرک",
-            score,
-            weight,
-            en,
-            fa,
-        )
+        return FactorResult("ma_trend", score, weight)
 
     def _score_volume(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         weight = self.weights.volume
@@ -325,15 +191,7 @@ class SignalEngine:
         avg_vol = df["volume"].tail(20).mean() if len(df) >= 20 else None
 
         if avg_vol is None or pd.isna(avg_vol) or avg_vol == 0:
-            return FactorResult(
-                "volume",
-                "Volume Confirmation",
-                "تأیید حجم معاملات",
-                0.0,
-                weight,
-                "Volume average unavailable.",
-                "میانگین حجم در دسترس نیست.",
-            )
+            return FactorResult("volume", 0.0, weight)
 
         ratio = vol / avg_vol
         price_change = (
@@ -343,41 +201,15 @@ class SignalEngine:
         )
 
         if ratio >= 1.5 and price_change > 0:
-            score, en, fa = (
-                1.0,
-                f"Volume {ratio:.1f}x average on an up day - strong buying confirmation.",
-                f"حجم {ratio:.1f} برابر میانگین در روز مثبت — تأیید قوی تقاضا.",
-            )
+            score = 1.0
         elif ratio >= 1.5 and price_change < 0:
-            score, en, fa = (
-                -1.0,
-                f"Volume {ratio:.1f}x average on a down day - strong selling confirmation.",
-                f"حجم {ratio:.1f} برابر میانگین در روز منفی — تأیید قوی عرضه.",
-            )
+            score = -1.0
         elif ratio < 0.8:
-            score, en, fa = (
-                0.0,
-                f"Volume only {ratio:.1f}x average - low participation, no confirmation either way.",
-                f"حجم تنها {ratio:.1f} برابر میانگین — مشارکت پایین، بدون تأیید.",
-            )
+            score = 0.0
         else:
-            direction = (
-                "up" if price_change > 0 else ("down" if price_change < 0 else "flat")
-            )
             score = 0.3 if price_change > 0 else (-0.3 if price_change < 0 else 0.0)
-            dir_fa = (
-                "مثبت"
-                if direction == "up"
-                else ("منفی" if direction == "down" else "خنثی")
-            )
-            en, fa = (
-                f"Volume near average ({ratio:.1f}x) on a {direction} day - mild, unconfirmed signal.",
-                f"حجم نزدیک به میانگین ({ratio:.1f} برابر) در روز {dir_fa} — سیگنال ضعیف.",
-            )
 
-        return FactorResult(
-            "volume", "Volume Confirmation", "تأیید حجم معاملات", score, weight, en, fa
-        )
+        return FactorResult("volume", score, weight)
 
     def _score_support_resistance(
         self, df: pd.DataFrame, latest: pd.Series
@@ -388,92 +220,41 @@ class SignalEngine:
         recent_high = latest.get("RECENT_HIGH_20")
 
         if pd.isna(recent_low) or pd.isna(recent_high) or recent_high == recent_low:
-            return FactorResult(
-                "support_resistance",
-                "Support/Resistance",
-                "حمایت/مقاومت",
-                0.0,
-                weight,
-                "Support/resistance unavailable.",
-                "حمایت/مقاومت در دسترس نیست.",
-            )
+            return FactorResult("support_resistance", 0.0, weight)
 
         position = (close - recent_low) / (recent_high - recent_low)
 
         if position <= 0.15:
-            score, en, fa = (
-                0.5,
-                "Price near its 20-day support - potential bounce zone.",
-                "قیمت نزدیک حمایت ۲۰ روزه — منطقه احتمالی بازگشت.",
-            )
+            score = 0.5
         elif position >= 0.85:
-            score, en, fa = (
-                -0.5,
-                "Price near its 20-day resistance - risk of rejection.",
-                "قیمت نزدیک مقاومت ۲۰ روزه — ریسک برگشت.",
-            )
+            score = -0.5
         elif position <= 0.35:
-            score, en, fa = (
-                0.2,
-                "Price in the lower part of its recent range.",
-                "قیمت در بخش پایینی محدوده اخیر.",
-            )
+            score = 0.2
         elif position >= 0.65:
-            score, en, fa = (
-                -0.2,
-                "Price in the upper part of its recent range, approaching resistance.",
-                "قیمت در بخش بالایی محدوده اخیر، نزدیک مقاومت.",
-            )
+            score = -0.2
         else:
-            score, en, fa = (
-                0.0,
-                "Price in the middle of its recent trading range.",
-                "قیمت در میانه محدوده اخیر.",
-            )
+            score = 0.0
 
-        return FactorResult(
-            "support_resistance",
-            "Support/Resistance Position",
-            "موقعیت نسبت به حمایت/مقاومت",
-            score,
-            weight,
-            en,
-            fa,
-        )
+        return FactorResult("support_resistance", score, weight)
 
-    def _volatility_multiplier(self, df: pd.DataFrame, latest: pd.Series) -> tuple:
+    def _volatility_multiplier(self, df: pd.DataFrame, latest: pd.Series) -> float:
         atr = latest.get("ATR_14")
         close = latest.get("close_price")
         if pd.isna(atr) or not close or len(df) < 60:
-            return (
-                1.0,
-                "Volatility baseline unavailable.",
-                "میانگین نوسان تاریخی در دسترس نیست.",
-            )
+            return 1.0
 
         atr_pct_series = df["ATR_14"] / df["close_price"]
         atr_pct = atr / close
         atr_pct_avg = atr_pct_series.tail(60).mean()
 
         if pd.isna(atr_pct_avg) or atr_pct_avg == 0:
-            return (
-                1.0,
-                "Volatility baseline unavailable.",
-                "میانگین نوسان تاریخی در دسترس نیست.",
-            )
+            return 1.0
 
         ratio = atr_pct / atr_pct_avg
         if ratio >= self.volatility_cfg.expansion_ratio:
-            m = self.volatility_cfg.expansion_multiplier
-            en = f"Volatility is expanding ({ratio:.1f}x normal) - confidence reduced to reflect higher uncertainty."
-            fa = f"نوسانات در حال گسترش است ({ratio:.1f} برابر عادی) — اطمینان برای انعکاس عدم قطعیت بیشتر کاهش یافت."
-            return m, en, fa
+            return self.volatility_cfg.expansion_multiplier
 
-        return (
-            1.0,
-            "Volatility is within its normal historical range.",
-            "نوسانات در محدوده عادی تاریخی است.",
-        )
+        return 1.0
 
     def _classify(self, composite: float) -> str:
         if composite >= self.thresholds.strong:
@@ -528,12 +309,12 @@ class SignalEngine:
     ) -> Recommendation:
         if df.empty or len(df) < MIN_HISTORY_DAYS:
             raise ValueError(
-                f"Not enough price history (need {MIN_HISTORY_DAYS}+ trading days). / "
-                f"داده تاریخی کافی نیست (حداقل {MIN_HISTORY_DAYS} روز لازم است)."
+                f"Not enough price history (need {MIN_HISTORY_DAYS}+ trading days) / "
+                f"داده تاریخی کافی نیست (حداقل {MIN_HISTORY_DAYS} روز لازم است)"
             )
 
         latest = df.iloc[-1]
-        name, name_fa = symbol or "This stock", symbol or "این سهم"
+        name = symbol or "This stock"
 
         factors = [method(df, latest) for _, method in self.FACTOR_METHODS]
 
@@ -546,12 +327,8 @@ class SignalEngine:
         factors.append(
             FactorResult(
                 "order_book",
-                "Order Book (Bid/Ask)",
-                "تابلو (عرضه و تقاضا)",
                 ob_reading.score,
                 ob_reading.weight,
-                ob_reading.reason_en,
-                ob_reading.reason_fa,
                 available=ob_reading.available,
             )
         )
@@ -562,12 +339,8 @@ class SignalEngine:
         factors.append(
             FactorResult(
                 "money_flow",
-                "Real Money Flow (حقیقی)",
-                "جریان پول حقیقی",
                 mf_reading.score,
                 mf_reading.weight,
-                mf_reading.reason_en,
-                mf_reading.reason_fa,
                 available=mf_reading.available,
             )
         )
@@ -581,98 +354,24 @@ class SignalEngine:
         )
         raw_composite = max(-1.0, min(1.0, raw_composite))
 
-        vol_multiplier, vol_reason_en, vol_reason_fa = self._volatility_multiplier(
-            df, latest
-        )
+        vol_multiplier = self._volatility_multiplier(df, latest)
         composite = max(-1.0, min(1.0, raw_composite * vol_multiplier))
         confidence = round(abs(composite) * 100, 1)
         verdict = self._classify(composite)
 
         levels = self._compute_entry_stop_target(latest)
-
-        direction_sign = 1 if composite > 0 else (-1 if composite < 0 else 0)
-        confirmations_en, confirmations_fa, risks_en, risks_fa = [], [], [], []
-        for f in factors:
-            if f.score == 0:
-                continue
-            agrees = (f.score > 0 and direction_sign >= 0) or (
-                f.score < 0 and direction_sign <= 0
-            )
-            (confirmations_en if agrees else risks_en).append(f.reason_en)
-            (confirmations_fa if agrees else risks_fa).append(f.reason_fa)
-
-        if vol_multiplier < 1.0:
-            risks_en.append(vol_reason_en)
-            risks_fa.append(vol_reason_fa)
-
         label = VERDICT_LABELS[verdict]
-        summary_en, summary_fa = self._build_summary(
-            name, name_fa, verdict, label, confidence, composite, levels
-        )
 
         return Recommendation(
             symbol=name,
-            generated_at=datetime.now().isoformat(timespec="seconds"),
             verdict=verdict,
             verdict_en=label["en"],
             verdict_fa=label["fa"],
             confidence=confidence,
-            composite_score=round(composite, 3),
-            raw_composite_score=round(raw_composite, 3),
             current_price=round(latest["close_price"]),
             entry_low=levels["entry_low"],
             entry_high=levels["entry_high"],
             stop_loss=levels["stop_loss"],
             target=levels["target"],
             risk_reward_ratio=levels["risk_reward_ratio"],
-            factors=factors,
-            volatility_multiplier=vol_multiplier,
-            volatility_reason_en=vol_reason_en,
-            volatility_reason_fa=vol_reason_fa,
-            confirmations_en=confirmations_en,
-            confirmations_fa=confirmations_fa,
-            risks_en=risks_en,
-            risks_fa=risks_fa,
-            summary_en=summary_en,
-            summary_fa=summary_fa,
         )
-
-    def _build_summary(
-        self, name, name_fa, verdict, label, confidence, composite, levels
-    ):
-        summary_en = (
-            f"{name}: composite score {composite:+.2f} (confidence {confidence:.0f}%), "
-            f"a {label['en']} reading. "
-        )
-        summary_fa = (
-            f"{name_fa}: امتیاز ترکیبی {composite:+.2f} (اطمینان {confidence:.0f}٪)، "
-            f"نتیجه «{label['fa']}». "
-        )
-
-        if verdict in ("BUY", "STRONG_BUY"):
-            summary_en += (
-                f"Suggested entry {levels['entry_low']:,.0f}-{levels['entry_high']:,.0f} Rial, "
-                f"stop-loss {levels['stop_loss']:,.0f}, target {levels['target']:,.0f} "
-                f"(risk:reward 1:{levels['risk_reward_ratio']})."
-            )
-            summary_fa += (
-                f"محدوده ورود پیشنهادی {levels['entry_low']:,.0f} تا {levels['entry_high']:,.0f} ریال، "
-                f"حد ضرر {levels['stop_loss']:,.0f}، هدف {levels['target']:,.0f} ریال "
-                f"(ریسک به بازده ۱ به {levels['risk_reward_ratio']})."
-            )
-        elif verdict in ("SELL", "STRONG_SELL"):
-            summary_en += (
-                "Conditions don't favor a new long entry. If already holding, the technical "
-                "picture suggests caution. (TSE retail accounts generally can't short-sell.)"
-            )
-            summary_fa += (
-                "شرایط فعلی از ورود خرید جدید حمایت نمی‌کند. در صورت داشتن این سهم، احتیاط بیشتری لازم است. "
-                "(در بورس ایران معمولاً امکان فروش استقراضی برای خرد وجود ندارد.)"
-            )
-        else:
-            summary_en += (
-                "Signals are mixed - no clear edge in either direction right now."
-            )
-            summary_fa += "سیگنال‌ها ترکیبی هستند — در حال حاضر مزیت واضحی در هیچ جهتی وجود ندارد."
-
-        return summary_en, summary_fa
