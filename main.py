@@ -22,7 +22,7 @@ LANG_CHOICES = {
 def choose_language() -> str:
     """Ask once at startup which language to use for everything after this."""
     print("=" * 50)
-    print("🌐 Choose your language / انتخاب زبان")
+    print("Choose your language / انتخاب زبان")
     print("=" * 50)
     print("[1] English")
     print("[2] فارسی")
@@ -136,22 +136,19 @@ def main():
     print("=" * 50)
     if lang == "en":
         print("Type one symbol, or several separated by spaces (e.g. فملی فولاد خودرو)")
-        print(f"Type one of {sorted(EXIT_COMMANDS)} to quit.")
+        print(f"Use {sorted(EXIT_COMMANDS)} to quit.")
     else:
-        print(
-            "یک یا چند نماد را با فاصله جدا کرده و وارد کنید (مثال: فملی فولاد خودرو)"
-        )
-        print(f"برای خروج: {sorted(EXIT_COMMANDS)}")
+        print("یک یا چند نماد را با فاصله جدا و وارد کنید (مثال: فملی فولاد خودرو)")
+        print(f"استفاده کنید {sorted(EXIT_COMMANDS)} برای خروج از")
 
     # Main loop: keep asking for symbols until the user types an exit word.
     while True:
-        prompt = "\n🔎 Symbol(s): " if lang == "en" else "\n🔎 نماد(ها): "
+        prompt = "\n Symbol(s): " if lang == "en" else "\n نماد(ها): "
         raw = input(prompt).strip()
 
         if not raw:
             continue
         if raw.lower() in EXIT_COMMANDS:
-            print("\n👋 Goodbye!" if lang == "en" else "\n👋 خداحافظ!")
             break
 
         symbols = parse_symbols(raw)
