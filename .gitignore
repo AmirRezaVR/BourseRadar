@@ -11,9 +11,7 @@ venv/
 env/
 
 # Database
-data/*.db
-data/*.sqlite
-data/*.sqlite3
+data/
 
 # Environment variables
 .env
