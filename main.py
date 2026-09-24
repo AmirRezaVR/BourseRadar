@@ -93,27 +93,27 @@ def print_batch_summary(results: list, lang: str):
     print("=" * 50)
 
     if lang == "en":
-        print(f"{'Symbol':<15}{'Verdict':<16}{'Confidence':<12}{'Entry Zone'}")
+        print(f"{'Symbol':<20}{'Verdict':<18}{'Entry Zone'}")
         print("-" * 50)
         for symbol, rec in results:
             if rec is None:
-                print(f"{symbol:<15}{'N/A':<16}{'-':<12}-")
+                print(f"{symbol:<16}{'N/A':<20}-")
             else:
                 icon = VERDICT_ICONS.get(rec.verdict, "")
                 print(
-                    f"{symbol:<15}{icon + ' ' + rec.verdict_en:<16}{f'{rec.confidence:.0f}%':<12}"
+                    f"{symbol:<16}{icon + ' ' + rec.verdict_en:<20}"
                     f"{rec.entry_low:,.0f}–{rec.entry_high:,.0f}"
                 )
     else:
-        print(f"{'نماد':<15}{'نتیجه':<20}{'اطمینان':<12}{'محدوده ورود'}")
+        print(f"{'نتیجه':<20}{'محدوده ورود':<25}{'نماد'}")
         print("-" * 50)
         for symbol, rec in results:
             if rec is None:
-                print(f"{symbol:<15}{'بدون داده':<20}{'-':<12}-")
+                print(f"{symbol:<15}{'بدون داده':<20}-")
             else:
                 icon = VERDICT_ICONS.get(rec.verdict, "")
                 print(
-                    f"{symbol:<15}{icon + ' ' + rec.verdict_fa:<20}{f'{rec.confidence:.0f}٪':<12}"
+                    f"{symbol:<15}{icon + ' ' + rec.verdict_fa:<20}"
                     f"{rec.entry_low:,.0f} تا {rec.entry_high:,.0f}"
                 )
     print("=" * 50)
