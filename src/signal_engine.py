@@ -68,7 +68,7 @@ MIN_HISTORY_DAYS = 60
 
 @dataclass
 class FactorResult:
-    """Just enough to compute the composite score - no display text, since nothing reads it anymore."""
+    """Just enough to compute the composite score"""
 
     name: str
     score: float
