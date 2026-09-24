@@ -1,12 +1,9 @@
 from src.tsetmc_fetcher import TSETMCFetcher
-from src.database import DatabaseManager
 from src.signal_engine import SignalEngine, VERDICT_ICONS
 from src.analysis_service import analyze_symbol_core, parse_symbols
 
 EXIT_COMMANDS = {"exit", "quit", "q", "خروج", "پایان"}
 
-# Accept a bunch of reasonable ways to say "English" or "Persian" so people
-# don't have to guess the exact word/number we're expecting.
 LANG_CHOICES = {
     "1": "en",
     "en": "en",
@@ -20,7 +17,6 @@ LANG_CHOICES = {
 
 
 def choose_language() -> str:
-    """Ask once at startup which language to use for everything after this."""
     print("=" * 50)
     print("Choose your language / انتخاب زبان")
     print("=" * 50)
@@ -33,8 +29,8 @@ def choose_language() -> str:
         print("Please enter 1 or 2. / لطفاً عدد ۱ یا ۲ را وارد کنید")
 
 
-def print_short_result(symbol: str, rec, lang: str, fetch_ts: str):
-    """The whole point of the program, basically: verdict, confidence, and the numbers you need."""
+def print_short_result(symbol: str, rec, lang: str, market_update: str):
+    """The whole point of the program."""
     icon = VERDICT_ICONS.get(rec.verdict, "")
     if lang == "en":
         print(
@@ -44,57 +40,56 @@ def print_short_result(symbol: str, rec, lang: str, fetch_ts: str):
             f"   Price: {rec.current_price:,.0f}  |  Entry: {rec.entry_low:,.0f}–{rec.entry_high:,.0f}  "
             f"|  Stop: {rec.stop_loss:,.0f}  |  Target: {rec.target:,.0f}  (1:{rec.risk_reward_ratio})"
         )
-        print(f"   Fetched: {fetch_ts}")
+        # Real last-update time from the exchange, not our own fetch time.
+        print(f"   Last market update: {market_update}")
     else:
         print(f"\n{icon} {symbol} — {rec.verdict_fa}  (اطمینان {rec.confidence:.0f}٪)")
         print(
             f"   قیمت: {rec.current_price:,.0f}  |  ورود: {rec.entry_low:,.0f} تا {rec.entry_high:,.0f}  "
             f"|  حد ضرر: {rec.stop_loss:,.0f}  |  هدف: {rec.target:,.0f}  (۱ به {rec.risk_reward_ratio})"
         )
-        print(f"   زمان دریافت: {fetch_ts}")
+        print(f"   آخرین بروزرسانی بازار: {market_update}")
 
 
 def analyze_symbol(
     symbol: str,
     fetcher: TSETMCFetcher,
-    db: DatabaseManager,
     engine: SignalEngine,
     lang: str,
 ):
-    """Runs one symbol through the shared pipeline and prints the result. Returns the Recommendation, or None if it failed."""
+    """Runs one symbol through the shared pipeline and prints the result."""
     print(f"\n⏳ {symbol}...")
 
-    result = analyze_symbol_core(symbol, fetcher, db, engine)
+    result = analyze_symbol_core(symbol, fetcher, engine)
 
-    # analyze_symbol_core never raises - it hands back a result with a
-    # reason attached, so we just decide how to say that here.
     if not result.success:
         if result.error == "no_data":
-            print("❌ No data retrieved." if lang == "en" else "❌ داده‌ای دریافت نشد")
+            print("No data retrieved." if lang == "en" else "داده‌ای دریافت نشد")
         elif result.error == "insufficient_history":
             msg = (
-                f"⚠️  Not enough history yet ({result.error_detail} days) for a signal"
+                f"Not enough history yet ({result.error_detail} days) for a signal"
                 if lang == "en"
-                else f"⚠️  داده کافی نیست ({result.error_detail} روز)"
+                else f"داده کافی نیست ({result.error_detail} روز)"
             )
             print(msg)
         else:
-            print(f"⚠️  {result.error_detail}")
+            print(f"{result.error_detail}")
         return None
 
     rec = result.recommendation
-    print_short_result(symbol, rec, lang, result.fetch_ts)
+    market_update = result.market_update_en if lang == "en" else result.market_update_fa
+    print_short_result(symbol, rec, lang, market_update)
 
     return rec
 
 
 def print_batch_summary(results: list, lang: str):
-    """Recap table at the end of a multi-symbol run. Skipped for a single symbol - nothing to summarize."""
+    """Recap table at the end of a multi-symbol run."""
     if len(results) < 2:
         return
 
     print("\n" + "=" * 50)
-    print("📋 Batch Summary" if lang == "en" else "📋 خلاصه گروهی")
+    print("Batch Summary" if lang == "en" else "خلاصه گروهی")
     print("=" * 50)
 
     if lang == "en":
@@ -128,11 +123,10 @@ def main():
     lang = choose_language()
 
     fetcher = TSETMCFetcher()
-    db = DatabaseManager()
     engine = SignalEngine()
 
     print("\n" + "=" * 50)
-    print("📈 BourseRadar")
+    print("BourseRadar")
     print("=" * 50)
     if lang == "en":
         print("Type one symbol, or several separated by spaces (e.g. فملی فولاد خودرو)")
@@ -161,7 +155,7 @@ def main():
             # looks noisy on a single symbol.
             if len(symbols) > 1:
                 print(f"\n[{i}/{len(symbols)}]", end="")
-            rec = analyze_symbol(symbol, fetcher, db, engine, lang)
+            rec = analyze_symbol(symbol, fetcher, engine, lang)
             results.append((symbol, rec))
 
         print_batch_summary(results, lang)
