@@ -3,6 +3,14 @@ import pandas as pd
 from typing import Optional
 
 
+def _format_heven(h) -> str:
+    try:
+        h = str(int(h)).zfill(6)
+        return f"{h[0:2]}:{h[2:4]}:{h[4:6]}"
+    except (ValueError, TypeError):
+        return ""
+
+
 class TSETMCFetcher:
     def __init__(self):
         self.headers = {
@@ -33,16 +41,12 @@ class TSETMCFetcher:
         if not results:
             return None
 
-        # Prefer an exact match on the short ticker (lVal18AFC)
         exact_matches = [r for r in results if r.get("lVal18AFC") == symbol]
 
         if exact_matches:
-            # If multiple exact matches, prefer main market/OTC stock (flow 1 or 2)
-            # over derivatives (flow 3) or others
             exact_matches.sort(key=lambda r: r.get("flow", 99))
             chosen = exact_matches[0]
         else:
-            # No exact match — fall back to the first result, but warn the user
             chosen = results[0]
             print(
                 f"⚠️  No exact match for '{symbol}'. Using closest result: "
@@ -74,6 +78,11 @@ class TSETMCFetcher:
             df_cleaned = pd.DataFrame(
                 {
                     "date": df["dEven"].astype(str),
+                    "last_update_time": (
+                        df["hEven"].apply(_format_heven)
+                        if "hEven" in df.columns
+                        else ""
+                    ),
                     "close_price": df["pClosing"],
                     "last_price": df["pDrCotVal"],
                     "open_price": df["priceFirst"],
