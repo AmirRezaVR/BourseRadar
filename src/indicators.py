@@ -58,6 +58,75 @@ class TechnicalIndicators:
         df[f"RECENT_HIGH_{window}"] = df["high_price"].rolling(window=window).max()
         return df
 
+    @staticmethod
+    def add_divergence(
+        df: pd.DataFrame,
+        oscillator: str,
+        prefix: str,
+        pivot_window: int = 3,
+        lookback: int = 60,
+        min_separation: int = 5,
+    ) -> pd.DataFrame:
+        """
+        Detect regular bullish/bearish divergence using confirmed price pivots.
+
+        A pivot is only usable after ``pivot_window`` subsequent candles have
+        closed. This keeps the signal usable in a historical backtest without
+        marking a divergence before it could have been observed.
+        """
+        bullish = [False] * len(df)
+        bearish = [False] * len(df)
+        if len(df) < (pivot_window * 2 + 1) or oscillator not in df:
+            df[f"{prefix}_BULLISH_DIVERGENCE"] = bullish
+            df[f"{prefix}_BEARISH_DIVERGENCE"] = bearish
+            return df
+
+        prices = pd.to_numeric(df["close_price"], errors="coerce").tolist()
+        values = pd.to_numeric(df[oscillator], errors="coerce").tolist()
+        confirmed_lows = []
+        confirmed_highs = []
+
+        for current in range(pivot_window * 2, len(df)):
+            pivot = current - pivot_window
+            start = max(0, pivot - pivot_window)
+            end = min(len(df), pivot + pivot_window + 1)
+            price_window = prices[start:end]
+            price = prices[pivot]
+
+            if pd.isna(price) or pd.isna(values[pivot]):
+                continue
+
+            if price == min(price_window):
+                confirmed_lows.append(pivot)
+            if price == max(price_window):
+                confirmed_highs.append(pivot)
+
+            cutoff = current - lookback
+            confirmed_lows = [index for index in confirmed_lows if index >= cutoff]
+            confirmed_highs = [index for index in confirmed_highs if index >= cutoff]
+
+            if len(confirmed_lows) >= 2:
+                first, second = confirmed_lows[-2:]
+                if (
+                    second - first >= min_separation
+                    and prices[second] < prices[first]
+                    and values[second] > values[first]
+                ):
+                    bullish[current] = True
+
+            if len(confirmed_highs) >= 2:
+                first, second = confirmed_highs[-2:]
+                if (
+                    second - first >= min_separation
+                    and prices[second] > prices[first]
+                    and values[second] < values[first]
+                ):
+                    bearish[current] = True
+
+        df[f"{prefix}_BULLISH_DIVERGENCE"] = bullish
+        df[f"{prefix}_BEARISH_DIVERGENCE"] = bearish
+        return df
+
     @classmethod
     def apply_all(cls, df: pd.DataFrame) -> pd.DataFrame:
         """Apply the indicators actually used by the signal engine and reports."""
@@ -67,4 +136,6 @@ class TechnicalIndicators:
         df = cls.add_macd(df)
         df = cls.add_atr(df, period=14)
         df = cls.add_recent_levels(df, window=20)
+        df = cls.add_divergence(df, "RSI_14", "RSI")
+        df = cls.add_divergence(df, "MACD", "MACD")
         return df
