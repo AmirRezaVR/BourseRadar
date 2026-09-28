@@ -146,6 +146,12 @@ class SignalEngine:
         else:
             score = 0.3
 
+        if latest.get("RSI_BULLISH_DIVERGENCE", False):
+            score += 0.4
+        elif latest.get("RSI_BEARISH_DIVERGENCE", False):
+            score -= 0.4
+
+        score = max(-1.0, min(1.0, score))
         return FactorResult("rsi", score, weight)
 
     def _score_macd(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
@@ -167,6 +173,12 @@ class SignalEngine:
         else:
             score = -1.0
 
+        if latest.get("MACD_BULLISH_DIVERGENCE", False):
+            score += 0.4
+        elif latest.get("MACD_BEARISH_DIVERGENCE", False):
+            score -= 0.4
+
+        score = max(-1.0, min(1.0, score))
         return FactorResult("macd", score, weight)
 
     def _score_ma_trend(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
