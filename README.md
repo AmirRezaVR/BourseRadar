@@ -1,54 +1,37 @@
 # BourseRadar
 
-BourseRadar is a command-line tool for reviewing Tehran Stock Exchange instruments. It retrieves market data, evaluates price and trading activity, and presents an indicative summary for each requested symbol.
+BourseRadar is a command-line project for collecting and analyzing stock market data.
 
-## Capabilities
+The project gets available market data, analyzes it using predefined methods, and provides a general summary of the selected instruments.
 
-- Analyze one symbol or a space- or comma-separated list of symbols.
-- Display a directional assessment, a score-based confidence measure, and indicative price levels.
-- Evaluate multiple market signals together rather than relying on a single measure.
-- Provide an English or Persian interface.
+## Features
+
+* Stock market data analysis
+* Support for analyzing multiple instruments
+* Simple analysis results and summaries
+* English and Persian language support
+* Command-line interface
 
 ## Requirements
 
-- Python 3.9 or later
-- Internet access to retrieve market data
+* Python
+* Internet connection
+* Required project dependencies
 
-## Installation
+## Usage
 
-```bash
-git clone https://github.com/AmirRezaVR/BourseRadar.git
-cd BourseRadar
-python -m venv .venv
-```
+Install the required dependencies and run the application from the command line.
 
-Activate the virtual environment:
+After starting the application, users can select the instruments they want to analyze and view the results.
 
-```powershell
-# Windows PowerShell
-.\.venv\Scripts\Activate.ps1
-```
+## Data and Limitations
 
-```bash
-# macOS or Linux
-source .venv/bin/activate
-```
+The project uses external market data sources, so the available data may change depending on those sources.
 
-Install the dependencies and start the application:
+The results are based on the available data and the analysis methods used by the project. They are provided for informational purposes and are not guaranteed predictions of future market performance.
 
-```bash
-pip install -r requirements.txt
-python main.py
-```
-
-Choose a language when prompted, then enter one or more Tehran Stock Exchange symbols. Enter `q`, `quit`, or `exit` to finish.
-
-## Data and limitations
-
-Market data is retrieved from TSETMC services and depends on their availability and coverage. The analysis is based on available market data; it does not incorporate company fundamentals, news, or an investor's personal circumstances. The confidence measure is derived from the analysis score and is not a probability of future performance.
-
-BourseRadar provides analysis only. It does not place orders or guarantee results. Any displayed assessment or price level is informational, not investment advice.
+BourseRadar does not perform trades or place orders.
 
 ## License
 
-This project is distributed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for details.
