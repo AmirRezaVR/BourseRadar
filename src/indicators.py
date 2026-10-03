@@ -59,6 +59,30 @@ class TechnicalIndicators:
         return df
 
     @staticmethod
+    def add_breakout_signals(
+        df: pd.DataFrame, window: int = 20, volume_multiplier: float = 1.5
+    ) -> pd.DataFrame:
+        """Detect volume-confirmed range breakouts and intraday false breaks."""
+        resistance = df["high_price"].rolling(window=window).max().shift(1)
+        support = df["low_price"].rolling(window=window).min().shift(1)
+        average_volume = df["volume"].rolling(window=window).mean().shift(1)
+        volume_confirmed = df["volume"] >= average_volume * volume_multiplier
+
+        df[f"BREAKOUT_UP_{window}"] = (
+            (df["close_price"] > resistance) & volume_confirmed
+        ).fillna(False)
+        df[f"BREAKOUT_DOWN_{window}"] = (
+            (df["close_price"] < support) & volume_confirmed
+        ).fillna(False)
+        df[f"FAKE_BREAKOUT_UP_{window}"] = (
+            (df["high_price"] > resistance) & (df["close_price"] <= resistance)
+        ).fillna(False)
+        df[f"FAKE_BREAKOUT_DOWN_{window}"] = (
+            (df["low_price"] < support) & (df["close_price"] >= support)
+        ).fillna(False)
+        return df
+
+    @staticmethod
     def add_divergence(
         df: pd.DataFrame,
         oscillator: str,
@@ -136,6 +160,7 @@ class TechnicalIndicators:
         df = cls.add_macd(df)
         df = cls.add_atr(df, period=14)
         df = cls.add_recent_levels(df, window=20)
+        df = cls.add_breakout_signals(df, window=20)
         df = cls.add_divergence(df, "RSI_14", "RSI")
         df = cls.add_divergence(df, "MACD", "MACD")
         return df
