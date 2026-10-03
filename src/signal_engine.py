@@ -228,6 +228,16 @@ class SignalEngine:
     ) -> FactorResult:
         weight = self.weights.support_resistance
         close = latest.get("close_price")
+
+        if latest.get("BREAKOUT_UP_20", False):
+            return FactorResult("support_resistance", 0.8, weight)
+        if latest.get("BREAKOUT_DOWN_20", False):
+            return FactorResult("support_resistance", -0.8, weight)
+        if latest.get("FAKE_BREAKOUT_UP_20", False):
+            return FactorResult("support_resistance", -0.6, weight)
+        if latest.get("FAKE_BREAKOUT_DOWN_20", False):
+            return FactorResult("support_resistance", 0.6, weight)
+
         recent_low = latest.get("RECENT_LOW_20")
         recent_high = latest.get("RECENT_HIGH_20")
 
