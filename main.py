@@ -1,5 +1,5 @@
 from src.tsetmc_fetcher import TSETMCFetcher
-from src.signal_engine import SignalEngine, VERDICT_ICONS
+from src.signal_engine import SignalEngine
 from src.analysis_service import analyze_symbol_core, parse_symbols
 
 EXIT_COMMANDS = {"exit", "quit", "q", "خروج", "پایان"}
@@ -31,10 +31,9 @@ def choose_language() -> str:
 
 def print_short_result(symbol: str, rec, lang: str, market_update: str):
     """The whole point of the program."""
-    icon = VERDICT_ICONS.get(rec.verdict, "")
     if lang == "en":
         print(
-            f"\n{icon} {symbol} — {rec.verdict_en}  ({rec.confidence:.0f}% confidence)"
+            f"\n{symbol} — {rec.verdict_en}  ({rec.confidence:.0f}% confidence)"
         )
         print(
             f"   Price: {rec.current_price:,.0f}  |  Entry: {rec.entry_low:,.0f}–{rec.entry_high:,.0f}  "
@@ -43,7 +42,7 @@ def print_short_result(symbol: str, rec, lang: str, market_update: str):
         # Real last-update time from the exchange, not our own fetch time.
         print(f"   Last market update: {market_update}")
     else:
-        print(f"\n{icon} {symbol} — {rec.verdict_fa}  (اطمینان {rec.confidence:.0f}٪)")
+        print(f"\n{symbol} — {rec.verdict_fa}  (اطمینان {rec.confidence:.0f}٪)")
         print(
             f"   قیمت: {rec.current_price:,.0f}  |  ورود: {rec.entry_low:,.0f} تا {rec.entry_high:,.0f}  "
             f"|  حد ضرر: {rec.stop_loss:,.0f}  |  هدف: {rec.target:,.0f}  (۱ به {rec.risk_reward_ratio})"
@@ -58,7 +57,7 @@ def analyze_symbol(
     lang: str,
 ):
     """Runs one symbol through the shared pipeline and prints the result."""
-    print(f"\n⏳ {symbol}...")
+    print(f"\n{symbol}...")
 
     result = analyze_symbol_core(symbol, fetcher, engine)
 
@@ -99,9 +98,8 @@ def print_batch_summary(results: list, lang: str):
             if rec is None:
                 print(f"{symbol:<16}{'N/A':<20}-")
             else:
-                icon = VERDICT_ICONS.get(rec.verdict, "")
                 print(
-                    f"{symbol:<16}{icon + ' ' + rec.verdict_en:<20}"
+                    f"{symbol:<16}{rec.verdict_en:<20}"
                     f"{rec.entry_low:,.0f}–{rec.entry_high:,.0f}"
                 )
     else:
@@ -109,13 +107,10 @@ def print_batch_summary(results: list, lang: str):
         print("-" * 50)
         for symbol, rec in results:
             if rec is None:
-                print(f"{symbol:<15}{'بدون داده':<20}-")
+                print(f"{'بدون داده':<20}{'-':<25}{symbol}")
             else:
-                icon = VERDICT_ICONS.get(rec.verdict, "")
-                print(
-                    f"{symbol:<15}{icon + ' ' + rec.verdict_fa:<20}"
-                    f"{rec.entry_low:,.0f} تا {rec.entry_high:,.0f}"
-                )
+                entry_zone = f"{rec.entry_low:,.0f} تا {rec.entry_high:,.0f}"
+                print(f"{rec.verdict_fa:<20}{entry_zone:<25}{symbol}")
     print("=" * 50)
 
 
