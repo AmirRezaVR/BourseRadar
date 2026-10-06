@@ -29,7 +29,7 @@ class TSETMCFetcher:
             data = response.json()
             return data.get("instrumentSearch", [])
         except Exception as e:
-            print(f"❌ Error searching for '{keyword}': {e}")
+            print(f"Error searching for '{keyword}': {e}")
             return []
 
     def get_symbol_id(self, symbol: str) -> Optional[str]:
@@ -49,7 +49,7 @@ class TSETMCFetcher:
         else:
             chosen = results[0]
             print(
-                f"⚠️  No exact match for '{symbol}'. Using closest result: "
+                f"Warning: no exact match for '{symbol}'. Using closest result: "
                 f"{chosen.get('lVal18AFC')} ({chosen.get('lVal30')})"
             )
 
@@ -60,7 +60,7 @@ class TSETMCFetcher:
     def fetch_daily_history(self, symbol: str) -> pd.DataFrame:
         inscode = self.get_symbol_id(symbol)
         if not inscode:
-            print(f"❌ Symbol {symbol} not found.")
+            print(f"Symbol {symbol} not found.")
             return pd.DataFrame()
 
         url = f"https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/{inscode}/0"
@@ -98,14 +98,14 @@ class TSETMCFetcher:
             return df_cleaned
 
         except Exception as e:
-            print(f"❌ Error fetching TSETMC data for {symbol}: {e}")
+            print(f"Error fetching TSETMC data for {symbol}: {e}")
             return pd.DataFrame()
 
     def fetch_client_type(self, symbol: str, deven: str) -> dict:
         """Real vs legal buyer/seller money flow for a specific trading day"""
         inscode = self.get_symbol_id(symbol)
         if not inscode:
-            print(f"❌ Symbol {symbol} not found.")
+            print(f"Symbol {symbol} not found.")
             return {}
 
         url = f"https://cdn.tsetmc.com/api/ClientType/GetClientTypeHistory/{inscode}/{deven}"
@@ -115,14 +115,14 @@ class TSETMCFetcher:
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            print(f"❌ Error fetching client type data for {symbol}: {e}")
+            print(f"Error fetching client type data for {symbol}: {e}")
             return {}
 
     def fetch_order_book(self, symbol: str) -> dict:
         """Buy/sell queue (best limits)"""
         inscode = self.get_symbol_id(symbol)
         if not inscode:
-            print(f"❌ Symbol {symbol} not found.")
+            print(f"Symbol {symbol} not found.")
             return {}
 
         url = f"https://cdn.tsetmc.com/api/BestLimits/{inscode}"
@@ -132,5 +132,5 @@ class TSETMCFetcher:
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            print(f"❌ Error fetching order book for {symbol}: {e}")
+            print(f"Error fetching order book for {symbol}: {e}")
             return {}
