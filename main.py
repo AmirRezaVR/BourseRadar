@@ -32,9 +32,7 @@ def choose_language() -> str:
 def print_short_result(symbol: str, rec, lang: str, market_update: str):
     """The whole point of the program."""
     if lang == "en":
-        print(
-            f"\n{symbol} — {rec.verdict_en}  ({rec.confidence:.0f}% confidence)"
-        )
+        print(f"\n{symbol} — {rec.verdict_en}  ({rec.confidence:.0f}% confidence)")
         print(
             f"   Price: {rec.current_price:,.0f}  |  Entry: {rec.entry_low:,.0f}–{rec.entry_high:,.0f}  "
             f"|  Stop: {rec.stop_loss:,.0f}  |  Target: {rec.target:,.0f}  (1:{rec.risk_reward_ratio})"
