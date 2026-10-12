@@ -1,3 +1,6 @@
+import math
+from datetime import datetime
+
 import pandas as pd
 from dataclasses import dataclass
 from typing import List, Optional
@@ -55,13 +58,6 @@ VERDICT_LABELS = {
     "NEUTRAL": {"en": "Neutral / Hold", "fa": "خنثی / نگهداری"},
     "SELL": {"en": "Sell", "fa": "فروش / اجتناب از خرید"},
     "STRONG_SELL": {"en": "Strong Sell", "fa": "فروش قوی / اجتناب جدی از خرید"},
-}
-VERDICT_ICONS = {
-    "STRONG_BUY": "🟢",
-    "BUY": "🟢",
-    "NEUTRAL": "🟡",
-    "SELL": "🔴",
-    "STRONG_SELL": "🔴",
 }
 MIN_HISTORY_DAYS = 60
 
@@ -193,14 +189,40 @@ class SignalEngine:
 
         short_term = 0.5 if close > ema20 else -0.5
         medium_term = 0.5 if ema20 > ema50 else -0.5
-        score = short_term + medium_term
+        trend_score = short_term + medium_term
+
+        close_prices = pd.to_numeric(df["close_price"], errors="coerce")
+        momentum_horizons = ((5, 0.06, 0.25), (20, 0.15, 0.40), (60, 0.30, 0.35))
+        momentum_scores = []
+        for days, scale, horizon_weight in momentum_horizons:
+            if len(close_prices) <= days:
+                continue
+            prior_close = close_prices.iloc[-days - 1]
+            if pd.isna(prior_close) or prior_close <= 0 or pd.isna(close):
+                continue
+            period_return = close / prior_close - 1
+            momentum_scores.append(
+                (max(-1.0, min(1.0, period_return / scale)), horizon_weight)
+            )
+
+        if momentum_scores:
+            total_horizon_weight = sum(
+                horizon_weight for _, horizon_weight in momentum_scores
+            )
+            momentum_score = (
+                sum(score * horizon_weight for score, horizon_weight in momentum_scores)
+                / total_horizon_weight
+            )
+            score = 0.55 * trend_score + 0.45 * momentum_score
+        else:
+            score = trend_score
 
         return FactorResult("ma_trend", score, weight)
 
     def _score_volume(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         weight = self.weights.volume
         vol = latest.get("volume")
-        avg_vol = df["volume"].tail(20).mean() if len(df) >= 20 else None
+        avg_vol = df["volume"].iloc[-21:-1].mean() if len(df) >= 21 else None
 
         if avg_vol is None or pd.isna(avg_vol) or avg_vol == 0:
             return FactorResult("volume", 0.0, weight)
@@ -288,6 +310,60 @@ class SignalEngine:
         if composite <= -self.thresholds.moderate:
             return "SELL"
         return "NEUTRAL"
+
+    def _scenario_analysis(self, factors: List[FactorResult]) -> tuple:
+        """Estimate bull/neutral/bear scenarios from less-correlated evidence groups."""
+        group_members = {
+            "trend": {"ma_trend"},
+            "momentum_indicators": {"rsi", "macd"},
+            "participation": {"volume", "order_book", "money_flow"},
+            "levels": {"support_resistance"},
+        }
+        group_scores = []
+        for members in group_members.values():
+            available = [f for f in factors if f.available and f.name in members]
+            group_weight = sum(f.weight for f in available)
+            if group_weight:
+                group_scores.append(
+                    sum(f.weighted_contribution for f in available) / group_weight
+                )
+
+        if not group_scores:
+            return 0.0, (1 / 3, 1 / 3, 1 / 3), 0.0
+
+        evidence = sum(group_scores) / len(group_scores)
+        dispersion = math.sqrt(
+            sum((score - evidence) ** 2 for score in group_scores) / len(group_scores)
+        )
+
+        # Conflicting evidence raises the neutral scenario's relative likelihood.
+        utilities = (evidence, 0.5 * dispersion, -evidence)
+        temperature = 0.55
+        exponentials = [math.exp(value / temperature) for value in utilities]
+        total = sum(exponentials)
+        probabilities = tuple(value / total for value in exponentials)
+        expected_direction = probabilities[0] - probabilities[2]
+        agreement = max(0.45, 1.0 - 0.55 * dispersion)
+        return expected_direction, probabilities, agreement
+
+    @staticmethod
+    def _freshness_multiplier(latest: pd.Series) -> float:
+        date_value = latest.get("date")
+        try:
+            date_text = str(date_value)
+            if len(date_text) == 8 and date_text.isdigit():
+                market_date = datetime.strptime(date_text, "%Y%m%d").date()
+            else:
+                market_date = datetime.strptime(date_text[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return 0.85
+
+        age_days = (datetime.now().date() - market_date).days
+        if age_days <= 3:
+            return 1.0
+        if age_days <= 14:
+            return 1.0 - 0.35 * (age_days - 3) / 11
+        return 0.65
 
     def _compute_entry_stop_target(self, latest: pd.Series) -> dict:
         close, ema20 = latest.get("close_price"), latest.get("EMA_20")
@@ -377,8 +453,26 @@ class SignalEngine:
         raw_composite = max(-1.0, min(1.0, raw_composite))
 
         vol_multiplier = self._volatility_multiplier(df, latest)
-        composite = max(-1.0, min(1.0, raw_composite * vol_multiplier))
-        confidence = round(abs(composite) * 100, 1)
+        scenario_direction, _, agreement = self._scenario_analysis(factors)
+        composite = max(
+            -1.0,
+            min(
+                1.0,
+                (0.7 * raw_composite + 0.3 * scenario_direction) * vol_multiplier,
+            ),
+        )
+        coverage = available_weight / self.weights.total()
+        confidence = round(
+            min(
+                95.0,
+                abs(composite)
+                * 100
+                * (0.65 + 0.35 * coverage)
+                * agreement
+                * self._freshness_multiplier(latest),
+            ),
+            1,
+        )
         verdict = self._classify(composite)
 
         levels = self._compute_entry_stop_target(latest)
