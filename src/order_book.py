@@ -29,6 +29,7 @@ class OrderBookSnapshot:
 @dataclass
 class OrderBookReading:
     """Just enough for the signal engine to use this as a factor."""
+
     score: float
     weight: float
     available: bool = True
@@ -46,11 +47,15 @@ class OrderBookAnalyzer:
         levels = []
         for row in best_limits:
             try:
-                levels.append(OrderBookLevel(
-                    level=row.get("number", 0),
-                    bid_price=float(row["pMeDem"]), bid_volume=int(row["qTitMeDem"]),
-                    ask_price=float(row["pMeOf"]), ask_volume=int(row["qTitMeOf"]),
-                ))
+                levels.append(
+                    OrderBookLevel(
+                        level=row.get("number", 0),
+                        bid_price=float(row["pMeDem"]),
+                        bid_volume=int(row["qTitMeDem"]),
+                        ask_price=float(row["pMeOf"]),
+                        ask_volume=int(row["qTitMeOf"]),
+                    )
+                )
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -59,7 +64,9 @@ class OrderBookAnalyzer:
         levels.sort(key=lambda l: l.level)
         return OrderBookSnapshot(symbol=symbol, levels=levels)
 
-    def analyze(self, snapshot: Optional[OrderBookSnapshot], weight: float = 14.0) -> OrderBookReading:
+    def analyze(
+        self, snapshot: Optional[OrderBookSnapshot], weight: float = 14.0
+    ) -> OrderBookReading:
         if snapshot is None or not snapshot.levels:
             return OrderBookReading(score=0.0, weight=weight, available=False)
 
