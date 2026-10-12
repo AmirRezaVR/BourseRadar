@@ -53,9 +53,13 @@ class TechnicalIndicators:
 
     @staticmethod
     def add_recent_levels(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
-        """Rolling recent support/resistance based on N-day high/low"""
-        df[f"RECENT_LOW_{window}"] = df["low_price"].rolling(window=window).min()
-        df[f"RECENT_HIGH_{window}"] = df["high_price"].rolling(window=window).max()
+        """Prior-session support/resistance based on the preceding N sessions."""
+        df[f"RECENT_LOW_{window}"] = (
+            df["low_price"].rolling(window=window).min().shift(1)
+        )
+        df[f"RECENT_HIGH_{window}"] = (
+            df["high_price"].rolling(window=window).max().shift(1)
+        )
         return df
 
     @staticmethod
