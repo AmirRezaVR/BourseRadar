@@ -25,7 +25,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Build exe
-        run: pyinstaller --onefile --console --name BourseRadar main.py
+        run: pyinstaller --onefile --windowed --noconfirm --name BourseRadar app_gui.py
 
       - name: Package
         shell: pwsh
