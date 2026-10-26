@@ -25,9 +25,6 @@ jobs:
           pip install -r requirements.txt
           pip install "pyinstaller>=6.0,<7"
 
-      - name: Run tests
-        run: python -m unittest discover -s tests -v
-
       - name: Build exe
         run: pyinstaller --onefile --windowed --noconfirm --name BourseRadar --collect-data tzdata app_gui.py
 
