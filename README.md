@@ -87,7 +87,3 @@ The executable is created in the `dist` folder.
 - `gui/`: desktop interface
 - `main.py`: terminal interface
 - `app_gui.py`: desktop entry point
-
-## License
-
-Distributed under the MIT License. See [LICENSE](LICENSE).
