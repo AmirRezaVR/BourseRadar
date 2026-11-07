@@ -1,89 +1,42 @@
 # BourseRadar
 
-BourseRadar is a desktop and terminal tool for analyzing stocks listed on the Tehran Stock Exchange (TSETMC). It collects public market data, runs technical and market-flow analyses, and shows a short summary for each symbol: a verdict, a confidence score, and suggested price levels.
+BourseRadar analyzes stocks on the Tehran Stock Exchange using public market data from TSETMC. For each symbol it gives a verdict, a signal strength, and price levels. It is available as a desktop window and as a terminal program.
 
-> **Disclaimer:** BourseRadar is for information and education only. It is not financial advice, it does not guarantee any result, and it does not place orders. Every decision and its risks are yours.
+> **Disclaimer:** This tool is for information and education only. It is not investment advice and does not guarantee any result. All decisions and risks are yours.
 
-## Features
+## How it works
 
-- Analyze one or several symbols at once
-- Desktop window (Windows) with a results table
-- Terminal version for command-line users
-- Persian interface; the terminal version also supports English
-- Adjustable font size in the desktop window, remembered between runs
-- Portable Windows build that needs no installation
+For each symbol, the program downloads daily history and calculates a set of technical indicators (trend, momentum, volume, volatility, and market flow). Their scores are combined into one composite score, which produces the verdict.
 
-## Download (Windows)
+## Install and run
 
-1. Open the [Releases](https://github.com/AmirRezaVR/BourseRadar/releases) page.
-2. Download the latest `BourseRadar-windows.zip`.
-3. Extract it to a folder you can write to, such as Desktop or Documents. Avoid Program Files, because the app saves its settings next to the program.
-4. Run `BourseRadar.exe`.
+**Windows:** Download `BourseRadar-windows.zip` from the Releases page, extract it to a folder you can write to (not Program Files), and run `BourseRadar.exe`.
 
-Windows may show a SmartScreen warning because the file is not digitally signed. Click **More info**, then **Run anyway**.
-
-## Run from source
-
-Requirements: Python 3.10 or newer and an internet connection.
+**From source:**
 
 ```bash
-git clone https://github.com/AmirRezaVR/BourseRadar.git
-cd BourseRadar
 pip install -r requirements.txt
+python app_gui.py    # desktop version
+python main.py       # terminal version
 ```
 
-Desktop version:
+## Usage
 
-```bash
-python app_gui.py
-```
+- **Desktop:** Type one or more symbols separated by spaces, then press Enter or click the analyze button. Each symbol appears as a row in the table.
+- **Terminal:** Choose a language, type one or more symbols separated by spaces, and type `exit` to quit.
 
-Terminal version:
+Use short symbol names as they appear on the exchange. Full company names are not supported.
 
-```bash
-python main.py
-```
+## Reading the output
 
-## How to use
-
-**Desktop:** Type one or more symbols separated by spaces, then press **Enter** or click **Analyze**. Each symbol appears as a row in the table. Use the font size selector to make the text larger.
-
-**Terminal:** Choose a language, enter one or more symbols, and type `exit` to quit.
-
-## Understanding the results
-
-- **Verdict:** A summary of the analysis, ranging from strong buy to strong sell, with a neutral (hold) option.
-- **Confidence:** How strongly the available signals agree with the verdict. It is not the probability that the verdict will be correct.
-- **Entry range, stop loss, and target:** Price levels calculated from recent volatility. They are estimates, not instructions.
-- **Last market update:** The time of the latest data received from the exchange.
-
-Additional columns show the estimated risk and reward.
-
-## Data source
-
-BourseRadar reads public data from TSETMC. These endpoints are not official APIs and may change or stop working without notice. If a symbol returns no data, check your internet connection or try again later.
+- **Verdict:** A summary of the analysis, from strong buy to strong sell.
+- **Signal strength:** A number from 0 to 100. It reflects how strong the analysis is, how many active indicators agree, and how actively the stock trades. It is not the probability that the verdict is correct.
+- **Price levels:** Entry, stop loss, target, and risk/reward are estimates based on recent prices and volatility. They are not orders. A dash (—) means no value applies for that verdict or that the data is not sufficient.
+- **Warnings:** Shown when the data has issues, such as large price jumps that may come from corporate actions.
 
 ## Limitations
 
-- Results depend on the available data and on the methods used. Past patterns do not guarantee future results.
-- The confidence score has not been independently validated.
-- Data for the current trading day may be incomplete during market hours.
-- Commissions, taxes, and price slippage are not included in the calculations.
-
-## Build the Windows executable
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name BourseRadar app_gui.py
-```
-
-The executable is created in the `dist` folder.
-
-**Automatic releases:** Pushing a version tag such as `v2.0.0` triggers a GitHub Actions workflow that builds the Windows package and publishes it on the Releases page.
-
-## Project structure
-
-- `src/`: data retrieval and analysis
-- `gui/`: desktop interface
-- `main.py`: terminal interface
-- `app_gui.py`: desktop entry point
+- Indicator weights and thresholds are set manually and have not been optimized.
+- Broker commissions and taxes are not included in the results.
+- Suspended, adjusted, or limit-price stocks can produce misleading signals.
+- TSETMC data is not an official API and may change without notice.
