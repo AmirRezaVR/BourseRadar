@@ -82,7 +82,11 @@ def analyze_symbol(
 ):
     print(f"\n{symbol}...")
 
-    result = analyze_symbol_core(symbol, fetcher, engine)
+    try:
+        result = analyze_symbol_core(symbol, fetcher, engine)
+    except Exception as error:  # keep the session alive, as the desktop app does
+        print(str(error) or type(error).__name__)
+        return None
 
     if not result.success:
         if result.error == "no_data":
