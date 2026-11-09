@@ -80,6 +80,24 @@ class AnalysisResult:
     warnings_fa: Optional[list] = None
 
 
+JUMP_THRESHOLD = 0.2
+
+
+def _start_after_last_jump(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep only the history from the last large price jump onward.
+
+    A jump of this size on a single day almost always comes from a corporate action
+    (capital increase, bonus shares, dividend). Without an adjusted price series,
+    indicators that mix prices from before and after the jump are not reliable.
+    """
+    close = pd.to_numeric(df["close_price"], errors="coerce")
+    jumps = close.pct_change().abs() > JUMP_THRESHOLD
+    if not jumps.any():
+        return df
+    first_index = jumps[jumps].index[-1]
+    return df.loc[first_index:].reset_index(drop=True)
+
+
 def _data_warnings(df: pd.DataFrame) -> tuple:
     warnings_en = []
     warnings_fa = []
@@ -119,8 +137,9 @@ def analyze_symbol_core(
     if df.empty:
         return AnalysisResult(symbol=symbol, success=False, error="no_data")
 
-    df_analyzed = TechnicalIndicators.apply_all(df)
-    warnings_en, warnings_fa = _data_warnings(df_analyzed)
+    # Warnings use the full history, so a jump is still reported after it is cut off.
+    warnings_en, warnings_fa = _data_warnings(df)
+    df_analyzed = TechnicalIndicators.apply_all(_start_after_last_jump(df))
 
     latest_date = df_analyzed.iloc[-1]["date"]
     latest_time = df_analyzed.iloc[-1].get("last_update_time", "")
