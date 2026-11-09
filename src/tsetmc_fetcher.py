@@ -103,16 +103,38 @@ class TSETMCFetcher:
             LOGGER.warning("Unexpected TSETMC response schema for symbol search rows")
             raise TSETMCAPIError("Instrument search contains an invalid result row")
 
-        exact_matches = [
+        candidates = [
             r
             for r in results
             if normalize_symbol(symbol) == normalize_symbol(str(r.get("lVal18AFC", "")))
         ]
-        if not exact_matches:
+
+        def _accepted_flow(row: dict) -> int | None:
+            flow = row.get("flow")
+            if isinstance(flow, bool):
+                return None
+            if isinstance(flow, int):
+                return flow if flow in (1, 2) else None
+            if isinstance(flow, float):
+                return int(flow) if flow in (1.0, 2.0) else None
+            if isinstance(flow, str):
+                stripped_flow = flow.strip()
+                return int(stripped_flow) if stripped_flow in ("1", "2") else None
+            return None
+
+        accepted_matches = [
+            (row, flow)
+            for row in candidates
+            if (flow := _accepted_flow(row)) is not None
+        ]
+        if not accepted_matches:
             raise SymbolNotFoundError(f"No exact ticker match for '{symbol}'")
 
-        exact_matches.sort(key=lambda r: r.get("flow", 99))
-        inscode = exact_matches[0].get("insCode")
+        selected_row = next(
+            (row for row, flow in accepted_matches if flow == 1),
+            accepted_matches[0][0],
+        )
+        inscode = selected_row.get("insCode")
         if not inscode:
             LOGGER.warning("TSETMC symbol search result is missing insCode")
             raise TSETMCAPIError("Instrument search result is missing insCode")
@@ -192,4 +214,20 @@ class TSETMCFetcher:
                 "count": df["zTotTran"],
             }
         )
+        # Sort by date and time first, so "keep last" really keeps the latest row.
+        df_cleaned = df_cleaned.sort_values(["date", "last_update_time"]).drop_duplicates(
+            subset="date", keep="last"
+        )
+
+        # A zero or missing low/high makes the true range (and therefore ATR and the
+        # stop distance) meaningless, so such rows are removed rather than analysed.
+        price_frame = df_cleaned[["close_price", "high_price", "low_price"]]
+        unusable = ~(price_frame > 0).all(axis=1)  # NaN > 0 is False
+        if unusable.any():
+            LOGGER.info(
+                "Dropped %d TSETMC rows with missing or non-positive prices",
+                int(unusable.sum()),
+            )
+            df_cleaned = df_cleaned[~unusable]
+
         return df_cleaned.sort_values("date").reset_index(drop=True)
