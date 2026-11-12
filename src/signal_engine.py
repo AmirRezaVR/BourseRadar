@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 
+
 @dataclass
 class SignalWeights:
 
@@ -15,15 +16,30 @@ class SignalWeights:
     ma_trend: float = 28
     volume: float = 20
     support_resistance: float = 20
+    # Added factors. Weights are not yet validated against history (see backtest step).
+    trend_strength: float = 8
+    bollinger: float = 5
+    money_flow: float = 8
+    vwap: float = 4
+    weekly_trend: float = 5
 
     def total(self) -> float:
         return (
-            self.rsi + self.macd + self.ma_trend + self.volume + self.support_resistance
+            self.rsi
+            + self.macd
+            + self.ma_trend
+            + self.volume
+            + self.support_resistance
+            + self.trend_strength
+            + self.bollinger
+            + self.money_flow
+            + self.vwap
+            + self.weekly_trend
         )
 
     def __post_init__(self):
-        if abs(self.total() - 100) > 0.01:
-            raise ValueError(f"SignalWeights must sum to 100, got {self.total()}")
+        if self.total() <= 0:
+            raise ValueError(f"SignalWeights must have a positive total, got {self.total()}")
 
 
 @dataclass
@@ -50,11 +66,6 @@ class FactorResult:
     name: str
     score: float
     weight: float
-
-    @property
-    def weighted_contribution(self) -> float:
-        return self.score * self.weight
-
 
 @dataclass
 class Recommendation:
@@ -93,37 +104,24 @@ class SignalEngine:
             ("ma_trend", self._score_ma_trend),
             ("volume", self._score_volume),
             ("support_resistance", self._score_support_resistance),
+            ("trend_strength", self._score_trend_strength),
+            ("bollinger", self._score_bollinger),
+            ("money_flow", self._score_money_flow),
+            ("vwap", self._score_vwap),
+            ("weekly_trend", self._score_weekly_trend),
         ]
 
     def _score_rsi(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
-        """Use contrarian scores at extreme RSI values."""
-        rsi = latest.get("RSI_14")
+        """Momentum score: above 50 is bullish, below 50 bearish, full score at 70 or 30.
+
+        RSI follows momentum here. It does not call a reversal at overbought or
+        oversold levels, and it does not add divergence.
+        """
         weight = self.weights.rsi
-        if pd.isna(rsi):
+        rsi = self._num(latest.get("RSI_14"))
+        if rsi is None:
             return FactorResult("rsi", 0.0, weight)
-
-        if rsi > 80:
-            score = -0.3
-        elif rsi > 70:
-            score = 0.3
-        elif rsi >= 55:
-            score = 0.6
-        elif rsi > 45:
-            score = 0.0
-        elif rsi >= 30:
-            score = -0.6
-        elif rsi >= 20:
-            score = -0.3
-        else:
-            score = 0.3
-
-        if latest.get("RSI_BULLISH_DIVERGENCE", False):
-            score += 0.4
-        elif latest.get("RSI_BEARISH_DIVERGENCE", False):
-            score -= 0.4
-
-        score = max(-1.0, min(1.0, score))
-        return FactorResult("rsi", score, weight)
+        return FactorResult("rsi", self._clip((rsi - 50) / 20), weight)
 
     def _score_macd(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         weight = self.weights.macd
@@ -159,7 +157,7 @@ class SignalEngine:
             latest.get("EMA_20"),
             latest.get("EMA_50"),
         )
-        if pd.isna(ema20) or pd.isna(ema50):
+        if pd.isna(close) or pd.isna(ema20) or pd.isna(ema50):
             return FactorResult("ma_trend", 0.0, weight)
 
         short_term = 0.5 if close > ema20 else -0.5
@@ -205,9 +203,12 @@ class SignalEngine:
     def _score_volume(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
         weight = self.weights.volume
         vol = latest.get("volume")
-        avg_vol = df["volume"].iloc[-21:-1].mean() if len(df) >= 21 else None
+        # Median, not mean: one past spike should not raise the baseline for weeks.
+        avg_vol = df["volume"].iloc[-21:-1].median() if len(df) >= 21 else None
 
         if avg_vol is None or pd.isna(avg_vol) or avg_vol == 0:
+            return FactorResult("volume", 0.0, weight)
+        if vol is None or pd.isna(vol):
             return FactorResult("volume", 0.0, weight)
 
         ratio = vol / avg_vol
@@ -216,6 +217,8 @@ class SignalEngine:
             if len(df) >= 2
             else 0
         )
+        if pd.isna(price_change):
+            price_change = 0
 
         if ratio >= 1.5 and price_change > 0:
             score = 1.0
@@ -265,6 +268,141 @@ class SignalEngine:
 
         return FactorResult("support_resistance", score, weight)
 
+    @staticmethod
+    def _num(value) -> Optional[float]:
+        """Return a finite float, or None for missing or non-finite values."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _clip(value: float) -> float:
+        return max(-1.0, min(1.0, value))
+
+    def _score_trend_strength(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
+        """ADX gates the direction from +DI/-DI: no directional view in a range (ADX < 20)."""
+        weight = self.weights.trend_strength
+        adx = self._num(latest.get("ADX_14"))
+        plus_di = self._num(latest.get("PLUS_DI_14"))
+        minus_di = self._num(latest.get("MINUS_DI_14"))
+        if adx is None or plus_di is None or minus_di is None or adx < 20:
+            return FactorResult("trend_strength", 0.0, weight)
+
+        direction = 1.0 if plus_di > minus_di else (-1.0 if minus_di > plus_di else 0.0)
+        strength = min(1.0, (adx - 20) / 20)
+        return FactorResult("trend_strength", direction * strength, weight)
+
+    def _score_bollinger(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
+        """%B on the upper or lower half; neutral while bands are squeezed (no direction yet)."""
+        weight = self.weights.bollinger
+        pct_b = self._num(latest.get("BB_PCT_B_20"))
+        if pct_b is None or bool(latest.get("BB_SQUEEZE_20", False)):
+            return FactorResult("bollinger", 0.0, weight)
+        return FactorResult("bollinger", self._clip(2 * (pct_b - 0.5)), weight)
+
+    def _score_money_flow(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
+        """Average of CMF, MFI, OBV flow and trade-size direction (available parts only)."""
+        weight = self.weights.money_flow
+        components = []
+
+        cmf = self._num(latest.get("CMF_20"))
+        if cmf is not None:
+            components.append(self._clip(cmf / 0.25))
+
+        mfi = self._num(latest.get("MFI_14"))
+        if mfi is not None:
+            components.append(self._clip((mfi - 50) / 30))
+
+        obv_flow = self._num(latest.get("OBV_FLOW_20"))
+        if obv_flow is not None:
+            components.append(self._clip(obv_flow))
+
+        ratio = self._num(latest.get("TRADE_SIZE_RATIO_20"))
+        if ratio is not None and len(df) >= 2:
+            change = self._num(latest.get("close_price") - df["close_price"].iloc[-2])
+            if change is not None and change != 0:
+                sign = 1.0 if change > 0 else -1.0
+                components.append(sign * min(1.0, max(0.0, (ratio - 1) / 0.5)))
+
+        if not components:
+            return FactorResult("money_flow", 0.0, weight)
+        return FactorResult("money_flow", sum(components) / len(components), weight)
+
+    def _score_vwap(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
+        """Price relative to the 20-day VWAP, scaled by ATR."""
+        weight = self.weights.vwap
+        close = self._num(latest.get("close_price"))
+        vwap = self._num(latest.get("VWAP_20"))
+        atr = self._num(latest.get("ATR_14"))
+        if close is None or vwap is None or atr is None or atr <= 0:
+            return FactorResult("vwap", 0.0, weight)
+        return FactorResult("vwap", self._clip((close - vwap) / (2 * atr)), weight)
+
+    def _score_weekly_trend(self, df: pd.DataFrame, latest: pd.Series) -> FactorResult:
+        """Last completed week: above (+1) or below (-1) its weekly EMA."""
+        weight = self.weights.weekly_trend
+        trend = self._num(latest.get("WEEKLY_TREND_10"))
+        return FactorResult("weekly_trend", self._clip(trend) if trend else 0.0, weight)
+
+    def composite_from_scores(self, scores: dict, excluded=frozenset(), scales=None) -> float:
+        """Weighted composite of factor scores. The one formula used by generate() and the backtest.
+
+        sum(score * weight * scale) / sum(weight * scale), clipped to [-1, 1].
+        scales optionally multiplies individual weights (for example the regime scaling).
+        """
+        scales = scales or {}
+        weighted, total = 0.0, 0.0
+        for name, score in scores.items():
+            if name in excluded:
+                continue
+            weight = getattr(self.weights, name) * scales.get(name, 1.0)
+            weighted += score * weight
+            total += weight
+        if total <= 0:
+            return 0.0
+        return self._clip(weighted / total)
+
+    TREND_FOLLOWING = ("ma_trend", "macd", "weekly_trend")
+
+    def _regime_scales(self, latest: pd.Series) -> dict:
+        """Halve trend-following weights when ADX shows a range (below 20)."""
+        adx = self._num(latest.get("ADX_14"))
+        if adx is not None and adx < 20:
+            return {name: 0.5 for name in self.TREND_FOLLOWING}
+        return {}
+
+    @staticmethod
+    def _agreement(factors, effective: dict, composite: float) -> float:
+        """Share of the active factor weight that points the same way as the composite.
+
+        This is what the README calls agreement: magnitude alone can be high even when
+        many active factors disagree. Returns 0 when there is no direction or no
+        active factor.
+        """
+        if composite == 0:
+            return 0.0
+        direction = 1.0 if composite > 0 else -1.0
+        active = [f for f in factors if abs(f.score) > 1e-9]
+        total = sum(effective[f.name] for f in active)
+        if total <= 0:
+            return 0.0
+        aligned = sum(
+            effective[f.name] for f in active if f.score * direction > 0
+        )
+        return aligned / total
+
+    @staticmethod
+    def _traded_ratio(df: pd.DataFrame) -> float:
+        """Share of the last 20 sessions with any trade. Thin trading lowers strength."""
+        if "volume" not in df.columns:
+            return 1.0
+        recent = pd.to_numeric(df["volume"].tail(20), errors="coerce")
+        if recent.empty or recent.isna().all():
+            return 1.0
+        return float((recent.fillna(0) > 0).mean())
+
     def _classify(self, composite: float) -> str:
         if composite >= self.thresholds.strong:
             return "STRONG_BUY"
@@ -300,7 +438,9 @@ class SignalEngine:
 
     @staticmethod
     def _is_partial_session(
-        latest: pd.Series, as_of_datetime: Optional[datetime] = None
+        latest: pd.Series,
+        as_of_datetime: Optional[datetime] = None,
+        session_close: datetime_time = MARKET_CLOSE_TIME,
     ) -> bool:
         date_value = latest.get("date")
         time_value = latest.get("last_update_time")
@@ -310,36 +450,60 @@ class SignalEngine:
                 market_date = datetime.strptime(date_text, "%Y%m%d").date()
             else:
                 market_date = datetime.strptime(date_text[:10], "%Y-%m-%d").date()
-            market_time = datetime.strptime(str(time_value)[:5], "%H:%M").time()
         except (TypeError, ValueError):
             return False
+
+        try:
+            market_time = datetime.strptime(str(time_value)[:5], "%H:%M").time()
+        except (TypeError, ValueError):
+            market_time = None  # update time missing on the row
 
         reference_datetime = as_of_datetime or datetime.now(TEHRAN_TZ).replace(
             tzinfo=None
         )
-        return (
-            market_date == reference_datetime.date()
-            and reference_datetime.time() < MARKET_CLOSE_TIME
-            and market_time < MARKET_CLOSE_TIME
-            and market_time <= reference_datetime.time()
-        )
+        if (
+            market_date != reference_datetime.date()
+            or reference_datetime.time() >= session_close
+        ):
+            return False
+        if market_time is None:
+            # Today's row before the close with no timestamp is still an open session.
+            return True
+        return market_time < session_close and market_time <= reference_datetime.time()
 
-    def _compute_entry_stop_target(
-        self, latest: pd.Series, is_short: bool = False
-    ) -> dict:
+    @staticmethod
+    def _session_close_time(history: pd.DataFrame) -> datetime_time:
+        """Close time of this symbol's session, from its recent update times.
+
+        Uses the latest update time among the last 10 completed sessions, and falls
+        back to the standard close when no usable time is available.
+        """
+        if history.empty or "last_update_time" not in history.columns:
+            return MARKET_CLOSE_TIME
+        times = []
+        for value in history["last_update_time"].tail(10):
+            text = str(value)
+            for fmt, width in (("%H:%M:%S", 8), ("%H:%M", 5)):
+                try:
+                    times.append(datetime.strptime(text[:width], fmt).time())
+                    break
+                except ValueError:
+                    continue
+        return max(times) if times else MARKET_CLOSE_TIME
+
+    def _compute_entry_stop_target(self, latest: pd.Series) -> dict:
+        """Long-side entry zone, stop loss, target and risk/reward for one day."""
         close, ema20 = latest.get("close_price"), latest.get("EMA_20")
         atr = latest.get("ATR_14")
 
         if pd.notna(ema20) and ema20:
             extension = (close - ema20) / ema20
-            if not is_short and extension > self.ENTRY_EXTENSION_THRESHOLD:
+            if extension > self.ENTRY_EXTENSION_THRESHOLD:
                 entry_low, entry_high = round(ema20), round(ema20 * 1.02)
-            elif is_short and extension < -self.ENTRY_EXTENSION_THRESHOLD:
-                entry_low, entry_high = round(ema20 * 0.98), round(ema20)
-            elif is_short:
-                entry_low, entry_high = round(close), round(max(close, ema20))
             else:
-                entry_low, entry_high = round(min(close, ema20)), round(close)
+                # The zone spans from the lower to the higher of close and EMA20.
+                entry_low = round(min(close, ema20))
+                entry_high = round(max(close, ema20))
         else:
             entry_low = entry_high = round(close)
 
@@ -350,47 +514,27 @@ class SignalEngine:
             stop_distance = entry_ref * self.MAX_STOP_DISTANCE_PCT
         stop_distance = min(stop_distance, entry_ref * self.MAX_STOP_DISTANCE_PCT)
 
-        recent_level = latest.get("RECENT_HIGH_20" if is_short else "RECENT_LOW_20")
-        if is_short:
-            atr_buffer = 0.5 * atr if pd.notna(atr) and atr > 0 else 0
-            stop_candidate = (
-                max(recent_level + atr_buffer, entry_ref + atr_buffer)
-                if pd.notna(recent_level)
-                else entry_ref + stop_distance
-            )
-            stop_loss = round(
-                min(stop_candidate, entry_ref * (1 + self.MAX_STOP_DISTANCE_PCT))
-            )
-            risk_per_share = max(stop_loss - entry_ref, 1)
-            support = latest.get("RECENT_LOW_20")
-            if pd.notna(support) and support < entry_ref:
-                target = support
-            elif pd.notna(atr) and atr > 0:
-                target = entry_ref - 2 * atr
-            else:
-                target = entry_ref * 0.96
-            target = round(max(1, target))
-            rr = round((entry_ref - target) / risk_per_share, 2)
+        recent_low = latest.get("RECENT_LOW_20")
+        atr_buffer = 0.5 * atr if pd.notna(atr) and atr > 0 else 0
+        stop_candidate = (
+            min(recent_low - atr_buffer, entry_ref - atr_buffer)
+            if pd.notna(recent_low)
+            else entry_ref - stop_distance
+        )
+        stop_loss = round(
+            max(stop_candidate, entry_ref * (1 - self.MAX_STOP_DISTANCE_PCT))
+        )
+        risk_per_share = max(entry_ref - stop_loss, 1)
+
+        resistance = latest.get("RECENT_HIGH_20")
+        if pd.notna(resistance) and resistance > entry_ref:
+            target = resistance
+        elif pd.notna(atr) and atr > 0:
+            target = entry_ref + 2 * atr
         else:
-            atr_buffer = 0.5 * atr if pd.notna(atr) and atr > 0 else 0
-            stop_candidate = (
-                min(recent_level - atr_buffer, entry_ref - atr_buffer)
-                if pd.notna(recent_level)
-                else entry_ref - stop_distance
-            )
-            stop_loss = round(
-                max(stop_candidate, entry_ref * (1 - self.MAX_STOP_DISTANCE_PCT))
-            )
-            risk_per_share = max(entry_ref - stop_loss, 1)
-            resistance = latest.get("RECENT_HIGH_20")
-            if pd.notna(resistance) and resistance > entry_ref:
-                target = resistance
-            elif pd.notna(atr) and atr > 0:
-                target = entry_ref + 2 * atr
-            else:
-                target = entry_ref * 1.04
-            target = round(target)
-            rr = round((target - entry_ref) / risk_per_share, 2)
+            target = entry_ref * 1.04
+        target = round(target)
+        rr = round((target - entry_ref) / risk_per_share, 2)
 
         return dict(
             entry_low=entry_low,
@@ -414,7 +558,11 @@ class SignalEngine:
             )
 
         market_latest = df.iloc[-1]
-        partial_session = self._is_partial_session(market_latest, as_of_datetime)
+        partial_session = self._is_partial_session(
+            market_latest,
+            as_of_datetime,
+            self._session_close_time(df.iloc[:-1]),
+        )
         scoring_df = df.iloc[:-1] if partial_session else df
         if len(scoring_df) < MIN_HISTORY_DAYS:
             raise ValueError(
@@ -426,15 +574,22 @@ class SignalEngine:
 
         factors = [method(scoring_df, latest) for _, method in self.FACTOR_METHODS]
 
-        raw_composite = (
-            sum(f.weighted_contribution for f in factors) / self.weights.total()
+        # Regime: in a range (ADX below 20) trend-following factors are less reliable,
+        # so their weight is halved for that day.
+        scales = self._regime_scales(latest)
+        effective = {f.name: f.weight * scales.get(f.name, 1.0) for f in factors}
+        raw_composite = self.composite_from_scores(
+            {f.name: f.score for f in factors}, scales=scales
         )
-        raw_composite = max(-1.0, min(1.0, raw_composite))
 
         composite = raw_composite
+        agreement = self._agreement(factors, effective, composite)
+        liquidity = self._traded_ratio(scoring_df)
         signal_strength = round(
             abs(composite)
             * 100
+            * agreement
+            * liquidity
             * self._freshness_multiplier(
                 latest,
                 as_of_date
@@ -445,25 +600,30 @@ class SignalEngine:
         verdict = self._classify(composite)
 
         current_price = market_latest.get("last_price")
-        if pd.isna(current_price):
+        if pd.isna(current_price) or current_price <= 0:
             current_price = market_latest["close_price"]
         level_inputs = latest.copy()
         level_inputs["close_price"] = current_price
-        levels = self._compute_entry_stop_target(
-            level_inputs, is_short=verdict in {"SELL", "STRONG_SELL"}
-        )
-        is_short = verdict in {"SELL", "STRONG_SELL"}
+        # Long-side levels: entry zone, stop below and target above.
+        # For a sell verdict the entry is hidden below and the stop and target are
+        # used as exit levels by a holder.
+        levels = self._compute_entry_stop_target(level_inputs)
         entry_ref = (levels["entry_low"] + levels["entry_high"]) / 2
-        direction_ok = (
-            levels["target"] < entry_ref if is_short else levels["target"] > entry_ref
-        )
+        direction_ok = levels["target"] > entry_ref
         setup_valid = (
-            verdict != "NEUTRAL"
+            verdict in {"BUY", "STRONG_BUY"}
             and direction_ok
             and levels["risk_reward_ratio"] >= MIN_RISK_REWARD
         )
-        if not setup_valid:
-            levels = {key: None for key in levels}
+        if verdict in {"SELL", "STRONG_SELL"}:
+            # A sell verdict is not a buy setup: no entry zone and no risk/reward.
+            # Stop loss and target stay as exit levels for someone who holds the stock.
+            levels = {
+                **levels,
+                "entry_low": None,
+                "entry_high": None,
+                "risk_reward_ratio": None,
+            }
         label = VERDICT_LABELS[verdict]
 
         return Recommendation(
