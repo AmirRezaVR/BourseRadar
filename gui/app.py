@@ -94,7 +94,7 @@ def build_row(symbol: str, result) -> ResultRow:
 
     rec = result.recommendation
 
-    # Neutral results and invalid setups have no price levels.
+    # Price levels are shown for every verdict; only invalid or hidden-entry cases display '—'.
     if rec.entry_low is None:
         entry_text = "—"
     else:

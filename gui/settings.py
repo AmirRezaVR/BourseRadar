@@ -19,7 +19,8 @@ SETTINGS_FILE = _app_dir() / "settings.json"
 def load_settings() -> dict:
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
-            return json.load(f)
+            settings = json.load(f)
+            return settings if isinstance(settings, dict) else {}
     except (OSError, ValueError):
         return {}
 
