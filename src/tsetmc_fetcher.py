@@ -1,14 +1,27 @@
 import logging
+import math
 import threading
 import time
+from dataclasses import dataclass
+from datetime import date, datetime
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import requests
 
 LOGGER = logging.getLogger(__name__)
 REQUEST_INTERVAL_SECONDS = 0.25
 MAX_RETRIES = 3
+TEHRAN_TZ = ZoneInfo("Asia/Tehran")
+
+
+@dataclass(frozen=True)
+class LiveQuote:
+    price: float
+    trade_date: date
+    trade_time: str
 
 
 class TSETMCAPIError(RuntimeError):
@@ -28,12 +41,20 @@ def normalize_symbol(text: str) -> str:
     )
 
 
-def _format_heven(h) -> str:
+def _format_heven(h) -> str | None:
     try:
-        h = str(int(h)).zfill(6)
-        return f"{h[0:2]}:{h[2:4]}:{h[4:6]}"
-    except (ValueError, TypeError):
-        return ""
+        if isinstance(h, (float, np.floating)) and not math.isfinite(float(h)):
+            return None
+        value = int(h)
+        if isinstance(h, float) and not h.is_integer():
+            return None
+        formatted = str(value).zfill(6)
+        if len(formatted) != 6:
+            return None
+        parsed = datetime.strptime(formatted, "%H%M%S")
+        return parsed.strftime("%H:%M:%S")
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 class TSETMCFetcher:
@@ -42,6 +63,9 @@ class TSETMCFetcher:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         self._symbol_cache = {}
+        self._live_quote_cache = {}
+        self._live_quote_cache_lock = threading.Lock()
+        self._live_quote_request_locks = {}
         self._request_lock = threading.Lock()
         self._last_request_time = 0.0
 
@@ -141,6 +165,60 @@ class TSETMCFetcher:
         self._symbol_cache[symbol] = inscode
         return inscode
 
+    def _clean_history(self, df_cleaned: pd.DataFrame) -> pd.DataFrame:
+        parsed_dates = pd.to_datetime(
+            df_cleaned["date"], format="%Y%m%d", errors="coerce"
+        )
+        valid_dates = parsed_dates.notna() & (
+            parsed_dates.dt.date <= datetime.now(TEHRAN_TZ).date()
+        )
+        df_cleaned = df_cleaned.loc[valid_dates].copy()
+        df_cleaned["date"] = df_cleaned["date"].astype(str)
+
+        # Missing times remain blank as before; malformed nonempty times cannot win
+        # duplicate selection over a valid exchange update.
+        df_cleaned = df_cleaned.loc[df_cleaned["last_update_time"].notna()].copy()
+
+        price_columns = [
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "last_price",
+        ]
+        finite_prices = np.isfinite(df_cleaned[price_columns]).all(axis=1)
+        df_cleaned = df_cleaned.loc[finite_prices].copy()
+
+        # Sort by date and time first, so "keep last" really keeps the latest row.
+        df_cleaned = df_cleaned.sort_values(
+            ["date", "last_update_time"]
+        ).drop_duplicates(subset="date", keep="last")
+
+        # A zero or missing low/high makes the true range (and therefore ATR and the
+        # stop distance) meaningless, so such rows are removed rather than analysed.
+        price_frame = df_cleaned[["close_price", "high_price", "low_price"]]
+        unusable = ~(price_frame > 0).all(axis=1)  # NaN > 0 is False
+        if unusable.any():
+            LOGGER.info(
+                "Dropped %d TSETMC rows with missing or non-positive prices",
+                int(unusable.sum()),
+            )
+            df_cleaned = df_cleaned[~unusable]
+
+        columns = [
+            "date",
+            "last_update_time",
+            "close_price",
+            "last_price",
+            "open_price",
+            "high_price",
+            "low_price",
+            "volume",
+            "value",
+            "count",
+        ]
+        return df_cleaned[columns].sort_values("date").reset_index(drop=True)
+
     def fetch_daily_history(self, symbol: str) -> pd.DataFrame:
         inscode = self.get_symbol_id(symbol)
 
@@ -202,7 +280,16 @@ class TSETMCFetcher:
             {
                 "date": df["dEven"].astype(str),
                 "last_update_time": (
-                    df["hEven"].apply(_format_heven) if "hEven" in df.columns else ""
+                    df["hEven"].apply(
+                        lambda value: (
+                            ""
+                            if pd.isna(value)
+                            or (isinstance(value, str) and not value.strip())
+                            else _format_heven(value)
+                        )
+                    )
+                    if "hEven" in df.columns
+                    else ""
                 ),
                 "close_price": df["pClosing"],
                 "last_price": df["pDrCotVal"],
@@ -214,20 +301,170 @@ class TSETMCFetcher:
                 "count": df["zTotTran"],
             }
         )
-        # Sort by date and time first, so "keep last" really keeps the latest row.
-        df_cleaned = df_cleaned.sort_values(["date", "last_update_time"]).drop_duplicates(
-            subset="date", keep="last"
+        return self._clean_history(df_cleaned)
+
+    def fetch_adjusted_history(self, ins_code: str) -> pd.DataFrame:
+        if not isinstance(ins_code, str) or not ins_code:
+            return pd.DataFrame()
+
+        url = (
+            "https://members.tsetmc.com/tsev2/chart/data/Financial.aspx"
+            f"?i={quote(ins_code, safe='')}&t=ph&a=1"
         )
+        self._wait_for_rate_limit()
+        try:
+            response = requests.get(url, headers=self.headers, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as error:
+            raise TSETMCAPIError(
+                f"TSETMC request failed for adjusted price history: {error}"
+            ) from error
 
-        # A zero or missing low/high makes the true range (and therefore ATR and the
-        # stop distance) meaningless, so such rows are removed rather than analysed.
-        price_frame = df_cleaned[["close_price", "high_price", "low_price"]]
-        unusable = ~(price_frame > 0).all(axis=1)  # NaN > 0 is False
-        if unusable.any():
-            LOGGER.info(
-                "Dropped %d TSETMC rows with missing or non-positive prices",
-                int(unusable.sum()),
+        if not isinstance(response.text, str):
+            raise TSETMCAPIError("Adjusted price history response is not text")
+        rows = []
+        for record in response.text.split(";"):
+            record = record.strip()
+            if not record:
+                continue
+            fields = record.split(",")
+            if len(fields) != 7:
+                raise TSETMCAPIError(
+                    "Adjusted price history contains an invalid row"
+                )
+            rows.append(fields)
+        if not rows:
+            return pd.DataFrame()
+
+        adjusted = pd.DataFrame(
+            rows,
+            columns=[
+                "date",
+                "high_price",
+                "low_price",
+                "open_price",
+                "last_price",
+                "volume",
+                "close_price",
+            ],
+        )
+        for column in [
+            "high_price",
+            "low_price",
+            "open_price",
+            "last_price",
+            "volume",
+            "close_price",
+        ]:
+            adjusted[column] = pd.to_numeric(adjusted[column], errors="coerce")
+        adjusted["last_update_time"] = ""
+        adjusted["value"] = np.nan
+        adjusted["count"] = np.nan
+        return self._clean_history(adjusted)
+
+    def get_live_quote(self, ins_code: str) -> LiveQuote | None:
+        if not isinstance(ins_code, str) or not ins_code:
+            return None
+
+        with self._live_quote_cache_lock:
+            now = time.monotonic()
+            cached = self._live_quote_cache.get(ins_code)
+            if cached is not None and cached[0] > now:
+                return cached[1]
+            request_lock = self._live_quote_request_locks.setdefault(
+                ins_code, threading.Lock()
             )
-            df_cleaned = df_cleaned[~unusable]
 
-        return df_cleaned.sort_values("date").reset_index(drop=True)
+        with request_lock:
+            with self._live_quote_cache_lock:
+                now = time.monotonic()
+                cached = self._live_quote_cache.get(ins_code)
+                if cached is not None and cached[0] > now:
+                    return cached[1]
+
+            quote = None
+            url = (
+                "https://cdn.tsetmc.com/api/ClosingPrice/"
+                f"GetClosingPriceInfo/{ins_code}"
+            )
+            try:
+                response = requests.get(url, headers=self.headers, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    record = (
+                        data.get("closingPriceInfo")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if isinstance(record, dict):
+                        raw_price = record.get("pDrCotVal")
+                        raw_date = record.get("dEven")
+                        raw_time = record.get("hEven")
+
+                        if not isinstance(raw_price, bool):
+                            try:
+                                price = float(raw_price)
+                            except (TypeError, ValueError, OverflowError):
+                                price = float("nan")
+                        else:
+                            price = float("nan")
+
+                        if isinstance(raw_date, int) and not isinstance(raw_date, bool):
+                            date_text = str(raw_date)
+                        elif isinstance(raw_date, str):
+                            date_text = raw_date
+                        else:
+                            date_text = ""
+                        try:
+                            trade_date = (
+                                datetime.strptime(date_text, "%Y%m%d").date()
+                                if len(date_text) == 8 and date_text.isdigit()
+                                else None
+                            )
+                        except ValueError:
+                            trade_date = None
+
+                        if isinstance(raw_time, int) and not isinstance(raw_time, bool):
+                            time_text = str(raw_time).zfill(6)
+                        elif isinstance(raw_time, str) and raw_time.isdigit():
+                            time_text = raw_time.zfill(6)
+                        else:
+                            time_text = ""
+                        try:
+                            parsed_time = (
+                                datetime.strptime(time_text, "%H%M%S")
+                                if len(time_text) == 6 and time_text.isdigit()
+                                else None
+                            )
+                        except ValueError:
+                            parsed_time = None
+
+                        if (
+                            math.isfinite(price)
+                            and price > 0
+                            and trade_date is not None
+                            and trade_date <= datetime.now(TEHRAN_TZ).date()
+                            and parsed_time is not None
+                            and datetime.strptime("090000", "%H%M%S").time()
+                            <= parsed_time.time()
+                            <= datetime.strptime("123000", "%H%M%S").time()
+                        ):
+                            quote = LiveQuote(
+                                price=price,
+                                trade_date=trade_date,
+                                trade_time=parsed_time.strftime("%H:%M:%S"),
+                            )
+            except (requests.RequestException, ValueError, TypeError, OverflowError):
+                quote = None
+
+            with self._live_quote_cache_lock:
+                cached = self._live_quote_cache.get(ins_code)
+                cached_quote = cached[1] if cached is not None else None
+                if cached_quote is not None and (
+                    quote is None
+                    or (cached_quote.trade_date, cached_quote.trade_time)
+                    > (quote.trade_date, quote.trade_time)
+                ):
+                    quote = cached_quote
+                self._live_quote_cache[ins_code] = (time.monotonic() + 5, quote)
+            return quote

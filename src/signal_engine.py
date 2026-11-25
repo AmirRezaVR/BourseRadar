@@ -38,14 +38,36 @@ class SignalWeights:
         )
 
     def __post_init__(self):
-        if self.total() <= 0:
-            raise ValueError(f"SignalWeights must have a positive total, got {self.total()}")
+        for name, weight in vars(self).items():
+            try:
+                valid = math.isfinite(weight) and weight >= 0
+            except TypeError:
+                valid = False
+            if not valid:
+                raise ValueError(
+                    f"SignalWeights field '{name}' must be finite and non-negative, got {weight}"
+                )
+        total = self.total()
+        if not math.isfinite(total):
+            raise ValueError(f"SignalWeights must have a finite total, got {total}")
+        if total <= 0:
+            raise ValueError(f"SignalWeights must have a positive total, got {total}")
 
 
 @dataclass
 class SignalThresholds:
     strong: float = 0.60  # |composite| >= this -> Strong Buy / Strong Sell
     moderate: float = 0.25  # |composite| >= this -> Buy / Sell
+
+    def __post_init__(self):
+        try:
+            valid = 0 < self.moderate < self.strong <= 1
+        except TypeError:
+            valid = False
+        if not valid:
+            raise ValueError(
+                "SignalThresholds must satisfy 0 < moderate < strong <= 1"
+            )
 
 
 VERDICT_LABELS = {
@@ -55,10 +77,20 @@ VERDICT_LABELS = {
     "SELL": {"en": "Sell", "fa": "فروش / اجتناب از خرید"},
     "STRONG_SELL": {"en": "Strong Sell", "fa": "فروش قوی / اجتناب جدی از خرید"},
 }
-MIN_HISTORY_DAYS = 60
+MIN_HISTORY_DAYS = 120
 MIN_RISK_REWARD = 1.0
+UNKNOWN_LIQUIDITY_FACTOR = 0.5
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MARKET_CLOSE_TIME = datetime_time(12, 30)
+
+
+class InsufficientHistoryError(ValueError):
+    def __init__(self, complete_rows: int, min_history_days: int):
+        self.complete_rows = complete_rows
+        self.min_history_days = min_history_days
+        super().__init__(
+            f"Not enough complete price history (need {min_history_days}+ trading days)"
+        )
 
 
 @dataclass
@@ -346,6 +378,11 @@ class SignalEngine:
         trend = self._num(latest.get("WEEKLY_TREND_10"))
         return FactorResult("weekly_trend", self._clip(trend) if trend else 0.0, weight)
 
+    def factor_scores(self, df: pd.DataFrame) -> dict:
+        """Score every factor on a complete history (used by the backtest)."""
+        latest = df.iloc[-1]
+        return {name: method(df, latest).score for name, method in self.FACTOR_METHODS}
+
     def composite_from_scores(self, scores: dict, excluded=frozenset(), scales=None) -> float:
         """Weighted composite of factor scores. The one formula used by generate() and the backtest.
 
@@ -394,13 +431,13 @@ class SignalEngine:
         return aligned / total
 
     @staticmethod
-    def _traded_ratio(df: pd.DataFrame) -> float:
+    def _traded_ratio(df: pd.DataFrame) -> Optional[float]:
         """Share of the last 20 sessions with any trade. Thin trading lowers strength."""
         if "volume" not in df.columns:
-            return 1.0
+            return None
         recent = pd.to_numeric(df["volume"].tail(20), errors="coerce")
         if recent.empty or recent.isna().all():
-            return 1.0
+            return None
         return float((recent.fillna(0) > 0).mean())
 
     def _classify(self, composite: float) -> str:
@@ -508,6 +545,7 @@ class SignalEngine:
             entry_low = entry_high = round(close)
 
         entry_ref = (entry_low + entry_high) / 2
+        anchor = float(close) if pd.notna(close) and close > entry_high else entry_ref
         if pd.notna(atr) and atr > 0:
             stop_distance = self.ATR_STOP_MULTIPLIER * atr
         else:
@@ -524,17 +562,26 @@ class SignalEngine:
         stop_loss = round(
             max(stop_candidate, entry_ref * (1 - self.MAX_STOP_DISTANCE_PCT))
         )
-        risk_per_share = max(entry_ref - stop_loss, 1)
+        risk = None
+        if stop_loss is not None and stop_loss >= entry_low:
+            stop_loss = None
+        if stop_loss is not None:
+            risk = anchor - stop_loss
+            if risk <= 0:
+                stop_loss = None
+                risk = None
 
         resistance = latest.get("RECENT_HIGH_20")
-        if pd.notna(resistance) and resistance > entry_ref:
+        if pd.notna(resistance) and resistance > anchor:
             target = resistance
         elif pd.notna(atr) and atr > 0:
-            target = entry_ref + 2 * atr
+            target = anchor + 2 * atr
         else:
-            target = entry_ref * 1.04
+            target = anchor * 1.04
         target = round(target)
-        rr = round((target - entry_ref) / risk_per_share, 2)
+        rr = None
+        if risk is not None and risk > 0 and target is not None:
+            rr = round((target - anchor) / risk, 2)
 
         return dict(
             entry_low=entry_low,
@@ -551,7 +598,7 @@ class SignalEngine:
         as_of_date: Optional[date] = None,
         as_of_datetime: Optional[datetime] = None,
     ) -> Recommendation:
-        if df.empty or len(df) < MIN_HISTORY_DAYS:
+        if df.empty:
             raise ValueError(
                 f"Not enough price history (need {MIN_HISTORY_DAYS}+ trading days) / "
                 f"داده تاریخی کافی نیست (حداقل {MIN_HISTORY_DAYS} روز لازم است)"
@@ -565,9 +612,11 @@ class SignalEngine:
         )
         scoring_df = df.iloc[:-1] if partial_session else df
         if len(scoring_df) < MIN_HISTORY_DAYS:
+            raise InsufficientHistoryError(len(scoring_df), MIN_HISTORY_DAYS)
+        if len(df) < MIN_HISTORY_DAYS and not partial_session:
             raise ValueError(
-                f"Not enough complete price history (need {MIN_HISTORY_DAYS}+ "
-                "trading days)"
+                f"Not enough price history (need {MIN_HISTORY_DAYS}+ trading days) / "
+                f"داده تاریخی کافی نیست (حداقل {MIN_HISTORY_DAYS} روز لازم است)"
             )
         latest = scoring_df.iloc[-1]
         name = symbol or "This stock"
@@ -585,19 +634,39 @@ class SignalEngine:
         composite = raw_composite
         agreement = self._agreement(factors, effective, composite)
         liquidity = self._traded_ratio(scoring_df)
-        signal_strength = round(
-            abs(composite)
-            * 100
-            * agreement
-            * liquidity
-            * self._freshness_multiplier(
-                latest,
-                as_of_date
-                or (as_of_datetime.date() if as_of_datetime is not None else None),
+        liquidity_factor = (
+            UNKNOWN_LIQUIDITY_FACTOR if liquidity is None else liquidity
+        )
+        freshness_latest = latest
+        market_update_date = df.attrs.get("market_update_date")
+        if market_update_date is not None:
+            freshness_latest = latest.copy()
+            freshness_latest["date"] = market_update_date
+        signal_strength = min(
+            100.0,
+            max(
+                0.0,
+                round(
+                    abs(composite)
+                    * 100
+                    * agreement
+                    * liquidity_factor
+                    * self._freshness_multiplier(
+                        freshness_latest,
+                        as_of_date
+                        or (
+                            as_of_datetime.date()
+                            if as_of_datetime is not None
+                            else None
+                        ),
+                    ),
+                    1,
+                ),
             ),
-            1,
         )
         verdict = self._classify(composite)
+        if signal_strength == 0.0 and verdict != "NEUTRAL":
+            verdict = "NEUTRAL"
 
         current_price = market_latest.get("last_price")
         if pd.isna(current_price) or current_price <= 0:
@@ -608,10 +677,24 @@ class SignalEngine:
         # For a sell verdict the entry is hidden below and the stop and target are
         # used as exit levels by a holder.
         levels = self._compute_entry_stop_target(level_inputs)
-        entry_ref = (levels["entry_low"] + levels["entry_high"]) / 2
-        direction_ok = levels["target"] > entry_ref
+        if verdict in {"BUY", "STRONG_BUY"} and levels["target"] is not None:
+            if levels["target"] <= current_price:
+                levels["target"] = None
+                levels["risk_reward_ratio"] = None
+        entry_ref = None
+        if levels["entry_low"] is not None and levels["entry_high"] is not None:
+            entry_ref = (levels["entry_low"] + levels["entry_high"]) / 2
+        direction_ok = (
+            levels["target"] is not None
+            and entry_ref is not None
+            and levels["target"] > entry_ref
+        )
         setup_valid = (
             verdict in {"BUY", "STRONG_BUY"}
+            and levels["stop_loss"] is not None
+            and levels["target"] is not None
+            and levels["risk_reward_ratio"] is not None
+            and levels["target"] > current_price
             and direction_ok
             and levels["risk_reward_ratio"] >= MIN_RISK_REWARD
         )
@@ -624,6 +707,15 @@ class SignalEngine:
                 "entry_high": None,
                 "risk_reward_ratio": None,
             }
+            setup_valid = False
+        if (
+            not setup_valid
+            or (
+                levels["risk_reward_ratio"] is not None
+                and levels["risk_reward_ratio"] < 1.0
+            )
+        ):
+            levels["risk_reward_ratio"] = None
         label = VERDICT_LABELS[verdict]
 
         return Recommendation(

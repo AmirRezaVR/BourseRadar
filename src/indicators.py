@@ -61,11 +61,7 @@ class TechnicalIndicators:
     @staticmethod
     def add_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         """Calculate ATR for volatility-based stop sizing."""
-        prev_close = df["close_price"].shift(1)
-        tr1 = df["high_price"] - df["low_price"]
-        tr2 = (df["high_price"] - prev_close).abs()
-        tr3 = (df["low_price"] - prev_close).abs()
-        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        true_range = TechnicalIndicators._true_range(df)
         df[f"ATR_{period}"] = TechnicalIndicators._wilder_average(true_range, period)
         return df
 
@@ -181,7 +177,9 @@ class TechnicalIndicators:
         tr1 = df["high_price"] - df["low_price"]
         tr2 = (df["high_price"] - prev_close).abs()
         tr3 = (df["low_price"] - prev_close).abs()
-        return pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1, skipna=False)
+        first_bar = prev_close.isna() & df["high_price"].notna() & df["low_price"].notna()
+        return true_range.mask(first_bar, tr1)
 
     @staticmethod
     def add_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
